@@ -3,10 +3,17 @@
 Supervision temps réel d'un PC Windows (CPU, RAM, disques, températures, ventilateurs, GPU, réseau, batterie) avec alertes, historique, détecteur de fuites mémoire et un **conseiller** qui explique quoi régler. S'adapte automatiquement à la machine sur laquelle il tourne (fixe/portable, AMD/Intel, NVIDIA/AMD/Intel, NVMe/SSD/HDD).
 
 ## Installation rapide (utilisateur)
+**En une ligne** (Win+R ou PowerShell, sans avertissement SmartScreen car rien ne passe par le navigateur) :
+```
+powershell -NoProfile -ExecutionPolicy Bypass -c "irm https://github.com/Dj394/PerfMonitor/releases/latest/download/Get-PerfMonitor.ps1 | iex"
+```
+Installe dans `%LOCALAPPDATA%\PerfMonitor` (option `-Dir` pour choisir, `-Portable` pour la variante avec runtime). Une seule invite UAC.
+
+**Ou avec le zip :**
 1. Télécharger **[PerfMonitor.zip](https://github.com/Dj394/PerfMonitor/releases/latest/download/PerfMonitor.zip)** (lien permanent vers la dernière version ; [PerfMonitor-portable.zip](https://github.com/Dj394/PerfMonitor/releases/latest/download/PerfMonitor-portable.zip) seulement pour une machine sans Internet : il embarque le runtime).
 2. Décompresser **tout** le zip dans un dossier définitif (ex. `C:\PerfMonitor`) : l'application y écrit ses réglages et son historique.
 3. Double-clic sur **`Installer.cmd`** → une invite UAC (l'appli lit les capteurs en administrateur). Le script installe **le runtime .NET 10** s'il manque (silencieux, Microsoft) et propose **PawnIO**. Ça crée la tâche planifiée « PerfMonitorLive » (démarrage à l'ouverture de session) et les raccourcis Bureau / menu Démarrer.
-4. SmartScreen au premier lancement (exe non signé) → *Informations complémentaires* › *Exécuter quand même*. L'onglet **Machine** montre ce qui a été détecté ; ensuite les mises à jour s'installent seules.
+4. Au double-clic sur `Installer.cmd`, Windows peut afficher « Avertissement de sécurité » → *Exécuter* (le script retire ensuite la marque du Web : plus d'avertissement pour l'exe, les raccourcis ni les mises à jour). L'onglet **Machine** montre ce qui a été détecté ; ensuite les mises à jour s'installent seules.
 
 Désinstaller : `Desinstaller.cmd` (tâche planifiée + raccourcis), puis supprimer le dossier. Rien n'est écrit ailleurs que dans le dossier de l'application (`data\`, `settings.json`).
 

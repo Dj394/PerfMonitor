@@ -9,5 +9,5 @@ if not exist "PerfMonitorLive.exe" (
 )
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0install-live.ps1"
 echo.
-echo Termine. Si une fenetre SmartScreen apparait au premier lancement : "Informations complementaires" puis "Executer quand meme".
+echo Termine.
 pause

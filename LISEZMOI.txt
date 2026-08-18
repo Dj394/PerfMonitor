@@ -6,7 +6,7 @@ PerfMonitor Live - installation
    - acceptez l'invite "Controle de compte d'utilisateur" (l'application lit les capteurs en administrateur)
    - le runtime .NET 10 (Microsoft) est installe automatiquement s'il manque
    - si PawnIO est propose, acceptez : sans lui, pas de temperature/ventilateurs CPU (le reste fonctionne)
-   - SmartScreen au premier lancement : "Informations complementaires" puis "Executer quand meme" (exe non signe)
+   - si Windows affiche "Avertissement de securite" pour Installer.cmd : Executer (c'est le seul ; ensuite plus rien)
 3. C'est tout : PerfMonitor demarre, se lance a chaque ouverture de session (icone dans la zone de notification)
    et se met a jour tout seul quand une nouvelle version sort.
 

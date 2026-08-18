@@ -8,6 +8,8 @@ if (-not $isAdmin) {
     Start-Process powershell.exe -Verb RunAs -Wait -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`""
     exit
 }
+# 0) Retire la "marque du Web" des fichiers extraits du zip : sans elle, SmartScreen ne s'interpose plus au lancement de l'exe.
+Get-ChildItem $PSScriptRoot -File | Unblock-File -ErrorAction SilentlyContinue
 # 0a) Runtime .NET 10 Desktop (x64) : requis par l'exe standard (l'exe "portable" l'embarque). Installe en silencieux s'il manque.
 $isPortable = (Get-Item $exe).Length -gt 50MB
 $net10 = Test-Path (Join-Path $env:ProgramFiles 'dotnet\shared\Microsoft.WindowsDesktop.App.*')
