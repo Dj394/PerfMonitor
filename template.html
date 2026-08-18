@@ -1,0 +1,108 @@
+<!doctype html><html lang="fr"><head><meta charset="utf-8"><title>PerfMonitor</title>
+<style>
+:root{--bg:#0f1419;--panel:#171d25;--fg:#e6e9ee;--mut:#8a94a3;--grid:#26303c;--c1:#4fa3ff;--c2:#ff7f50;--c3:#7ee08a;--c4:#e2b93b;--c5:#c58cff;--c6:#ff5c8a}
+body{margin:0;background:var(--bg);color:var(--fg);font:14px system-ui,Segoe UI,sans-serif}
+header{display:flex;align-items:center;gap:16px;padding:12px 20px;border-bottom:1px solid var(--grid);flex-wrap:wrap}
+h1{font-size:18px;margin:0}
+.range button{background:var(--panel);color:var(--fg);border:1px solid var(--grid);padding:5px 10px;margin-left:4px;border-radius:4px;cursor:pointer}
+.range button.on{background:var(--c1);border-color:var(--c1);color:#000}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;padding:14px 20px}
+.tile{background:var(--panel);border-radius:8px;padding:10px 14px}
+.tile .l{color:var(--mut);font-size:12px}.tile .v{font-size:22px;font-weight:600}.tile .s{color:var(--mut);font-size:11px}
+.charts{display:grid;grid-template-columns:repeat(auto-fit,minmax(480px,1fr));gap:14px;padding:0 20px 20px}
+.chart{background:var(--panel);border-radius:8px;padding:10px}
+.chart h2{font-size:13px;margin:0 0 6px;color:var(--mut);font-weight:500}
+canvas{width:100%;height:200px;display:block}
+.legend span{display:inline-block;margin-right:12px;font-size:12px}.legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:4px;vertical-align:-1px}
+table{border-collapse:collapse;width:100%;font-size:13px}td,th{padding:4px 8px;text-align:left;border-bottom:1px solid var(--grid)}th{color:var(--mut);font-weight:500}td.n{text-align:right;font-variant-numeric:tabular-nums}
+#tip{position:fixed;pointer-events:none;background:#000c;color:#fff;padding:6px 8px;border-radius:4px;font-size:12px;display:none;white-space:pre;z-index:9}
+.foot{color:var(--mut);font-size:12px;padding:0 20px 20px}
+</style></head><body>
+<header><h1>PerfMonitor</h1><span id="info" style="color:var(--mut)"></span>
+<span class="range" style="margin-left:auto">Plage :
+<button data-h="1">1 h</button><button data-h="3">3 h</button><button data-h="6">6 h</button><button data-h="12">12 h</button><button data-h="24">24 h</button><button data-h="0" class="on">Tout</button></span></header>
+<div class="tiles" id="tiles"></div>
+<div class="charts" id="charts"></div>
+<div class="charts"><div class="chart"><h2>Top processus (CPU moyen sur la plage)</h2><table id="procs"></table></div>
+<div class="chart"><h2>Marqueurs de réglages (.\note.ps1 "texte")</h2><table id="notes"></table></div></div>
+<div class="foot">Généré le __GEN__ · fenêtre chargée : __HOURS__ h · Survolez les graphiques pour les valeurs. Les traits verticaux pointillés sont vos marqueurs.</div>
+<div id="tip"></div>
+<script>
+const ALL=/*__DATA__*/[];const NOTES=/*__NOTES__*/[];
+ALL.forEach(s=>s.t=new Date(s.ts).getTime());NOTES.forEach(n=>n.t=new Date(n.ts).getTime());
+const diskNames=[...new Set(ALL.flatMap(s=>(s.disks||[]).map(d=>d.n)))];
+const C=['--c1','--c2','--c3','--c4','--c5','--c6'].map(v=>getComputedStyle(document.documentElement).getPropertyValue(v).trim());
+let hours=0,D=ALL;
+function fmtT(t){const d=new Date(t);return d.toLocaleDateString('fr-FR',{day:'2-digit',month:'2-digit'})+' '+d.toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'})}
+function avg(a){return a.length?a.reduce((x,y)=>x+y,0)/a.length:0}
+function q(a,p){if(!a.length)return 0;const s=[...a].sort((x,y)=>x-y);return s[Math.min(s.length-1,Math.floor(p*s.length))]}
+const charts=[];
+function chart(title,series,opts={}){
+  const box=document.createElement('div');box.className='chart';
+  box.innerHTML=`<h2>${title}</h2><canvas></canvas><div class="legend">${series.map((s,i)=>`<span><i style="background:${C[i]}"></i>${s.name}</span>`).join('')}</div>`;
+  document.getElementById('charts').appendChild(box);
+  const cv=box.querySelector('canvas');charts.push({cv,series,opts});
+  cv.addEventListener('mousemove',e=>hover(e,cv,series,opts));cv.addEventListener('mouseleave',()=>tip.style.display='none');
+}
+function draw(){
+  charts.forEach(({cv,series,opts})=>{
+    const W=cv.clientWidth,H=cv.clientHeight;cv.width=W*devicePixelRatio;cv.height=H*devicePixelRatio;
+    const g=cv.getContext('2d');g.scale(devicePixelRatio,devicePixelRatio);
+    const L=48,R=8,T=8,B=22,w=W-L-R,h=H-T-B;
+    if(!D.length){g.fillStyle='#8a94a3';g.fillText('Aucune donnée',L,H/2);return}
+    const t0=D[0].t,t1=D[D.length-1].t||t0+1;
+    let max=opts.max||0;if(!opts.max){series.forEach(s=>D.forEach(p=>{const v=s.f(p);if(v!=null&&v>max)max=v}));max=max<=0?1:max*1.1}
+    const X=t=>L+(t-t0)/(t1-t0||1)*w,Y=v=>T+h-v/max*h;
+    g.strokeStyle='#26303c';g.fillStyle='#8a94a3';g.font='11px system-ui';g.lineWidth=1;
+    for(let i=0;i<=4;i++){const y=T+h*i/4;g.beginPath();g.moveTo(L,y);g.lineTo(W-R,y);g.stroke();g.textAlign='right';g.fillText(fmtV(max*(1-i/4),opts.unit),L-4,y+4)}
+    const nT=Math.max(2,Math.floor(w/110));g.textAlign='center';for(let i=0;i<=nT;i++){const t=t0+(t1-t0)*i/nT;g.fillText(fmtT(t),X(t),H-6)}
+    NOTES.filter(n=>n.t>=t0&&n.t<=t1).forEach(n=>{g.save();g.setLineDash([3,3]);g.strokeStyle='#e2b93b';g.beginPath();g.moveTo(X(n.t),T);g.lineTo(X(n.t),T+h);g.stroke();g.restore()});
+    series.forEach((s,i)=>{g.strokeStyle=C[i];g.lineWidth=1.4;g.beginPath();let pen=false;
+      D.forEach((p,k)=>{const v=s.f(p);if(v==null){pen=false;return}
+        if(k>0&&p.t-D[k-1].t>60000)pen=false;
+        const x=X(p.t),y=Y(Math.min(v,max));if(pen)g.lineTo(x,y);else g.moveTo(x,y);pen=true});
+      g.stroke()});
+    cv._X={t0,t1,L,w};
+  });
+}
+function fmtV(v,u){if(u==='%')return Math.round(v)+'%';if(u==='MB')return v>=1024?(v/1024).toFixed(1)+' Go':Math.round(v)+' Mo';if(u==='MB/s')return v.toFixed(v<10?1:0)+' Mo/s';if(u==='KB/s')return v>=1024?(v/1024).toFixed(1)+' Mo/s':Math.round(v)+' Ko/s';if(u==='ms')return v.toFixed(v<10?1:0)+' ms';if(u==='°C')return v.toFixed(0)+'°C';return v.toFixed(1)}
+const tip=document.getElementById('tip');
+function hover(e,cv,series,opts){if(!cv._X||!D.length)return;const r=cv.getBoundingClientRect();const {t0,t1,L,w}=cv._X;const t=t0+(e.clientX-r.left-L)/w*(t1-t0);
+  let lo=0,hi=D.length-1;while(lo<hi){const m=(lo+hi)>>1;if(D[m].t<t)lo=m+1;else hi=m}const p=D[lo];
+  const notes=NOTES.filter(n=>Math.abs(n.t-p.t)<(t1-t0)/150).map(n=>'\n📌 '+n.text).join('');
+  tip.textContent=fmtT(p.t)+' '+new Date(p.t).toLocaleTimeString('fr-FR').slice(6)+'\n'+series.map(s=>{const v=s.f(p);return s.name+' : '+(v==null?'–':fmtV(v,opts.unit))}).join('\n')+(p.procs&&opts.procs?'\n— '+p.procs.slice(0,3).map(x=>x.n+' '+x.cpu+'%').join(', '):'')+notes;
+  tip.style.display='block';tip.style.left=Math.min(e.clientX+14,innerWidth-260)+'px';tip.style.top=(e.clientY+14)+'px'}
+function tiles(){
+  const cpu=D.map(s=>s.cpu),mem=D.map(s=>s.memPct),temps=D.map(s=>s.temp).filter(v=>v!=null);
+  const dk=diskNames.map(n=>{const a=D.map(s=>(s.disks||[]).find(d=>d.n===n)).filter(Boolean);return {n,pct:avg(a.map(d=>d.pct)),lat:q(a.map(d=>d.lat),.95)}});
+  const worst=dk.sort((a,b)=>b.pct-a.pct)[0];
+  const T=[['CPU moyen',fmtV(avg(cpu),'%'),'p95 '+fmtV(q(cpu,.95),'%')+' · max '+fmtV(Math.max(0,...cpu),'%')],
+    ['RAM moyenne',fmtV(avg(mem),'%'),'max '+fmtV(Math.max(0,...mem),'%')+' · '+fmtV(avg(D.map(s=>s.memMB)),'MB')],
+    worst?['Disque le + sollicité',worst.n.split(' ')[0]+' '+fmtV(worst.pct,'%'),'latence p95 '+fmtV(worst.lat,'ms')]:null,
+    ['Échantillons',D.length,D.length?fmtT(D[0].t)+' → '+fmtT(D[D.length-1].t):''],
+    temps.length?['Température',fmtV(avg(temps),'°C'),'max '+fmtV(Math.max(...temps),'°C')]:null,
+    ['Marqueurs',NOTES.filter(n=>D.length&&n.t>=D[0].t).length,'sur la plage']].filter(Boolean);
+  document.getElementById('tiles').innerHTML=T.map(t=>`<div class="tile"><div class="l">${t[0]}</div><div class="v">${t[1]}</div><div class="s">${t[2]}</div></div>`).join('');
+  const agg={};D.forEach(s=>(s.procs||[]).forEach(p=>{const a=agg[p.n]=agg[p.n]||{c:0,m:0,k:0};a.c+=p.cpu;a.m=Math.max(a.m,p.mem);a.k++}));
+  const rows=Object.entries(agg).map(([n,a])=>({n,cpu:a.c/Math.max(D.length,1),mem:a.m,k:a.k})).sort((a,b)=>b.cpu-a.cpu).slice(0,12);
+  document.getElementById('procs').innerHTML='<tr><th>Processus</th><th>CPU moyen</th><th>RAM max</th><th>Présent (% du temps)</th></tr>'+rows.map(r=>`<tr><td>${r.n}</td><td class="n">${r.cpu.toFixed(1)}%</td><td class="n">${fmtV(r.mem,'MB')}</td><td class="n">${Math.round(r.k*100/Math.max(D.length,1))}%</td></tr>`).join('');
+  const nn=NOTES.filter(n=>!D.length||n.t>=D[0].t-3600e3);
+  document.getElementById('notes').innerHTML=nn.length?nn.map(n=>`<tr><td style="color:var(--mut);white-space:nowrap">${fmtT(n.t)}</td><td>${n.text}</td></tr>`).join(''):'<tr><td style="color:var(--mut)">Aucun marqueur. Ajoutez-en avant/après chaque réglage pour comparer.</td></tr>';
+}
+function setRange(h){hours=h;document.querySelectorAll('.range button').forEach(b=>b.classList.toggle('on',+b.dataset.h===h));
+  D=h&&ALL.length?ALL.filter(s=>s.t>=ALL[ALL.length-1].t-h*3600e3):ALL;
+  document.getElementById('info').textContent=`${D.length} échantillons`;tiles();draw()}
+document.querySelectorAll('.range button').forEach(b=>b.onclick=()=>setRange(+b.dataset.h));
+chart('CPU (%)',[{name:'CPU total',f:s=>s.cpu}],{max:100,unit:'%',procs:true});
+chart('Mémoire',[{name:'RAM utilisée %',f:s=>s.memPct}],{max:100,unit:'%'});
+diskNames.forEach(n=>{
+  const D_=s=>(s.disks||[]).find(d=>d.n===n);
+  chart('Disque '+n+' — activité',[{name:'% actif',f:s=>{const d=D_(s);return d?d.pct:null}}],{max:100,unit:'%'});
+  chart('Disque '+n+' — débit',[{name:'Lecture',f:s=>{const d=D_(s);return d?d.r:null}},{name:'Écriture',f:s=>{const d=D_(s);return d?d.w:null}}],{unit:'MB/s'});
+  chart('Disque '+n+' — latence',[{name:'ms / transfert',f:s=>{const d=D_(s);return d?d.lat:null}}],{unit:'ms'});
+});
+chart('Réseau',[{name:'Reçu',f:s=>s.rx},{name:'Envoyé',f:s=>s.tx}],{unit:'KB/s'});
+if(ALL.some(s=>s.temp!=null))chart('Température',[{name:'Zone thermique',f:s=>s.temp}],{unit:'°C'});
+chart('Pages mémoire lues / s (pression RAM)',[{name:'Pages in/s',f:s=>s.pageIn}],{});
+addEventListener('resize',draw);setRange(0);
+</script></body></html>

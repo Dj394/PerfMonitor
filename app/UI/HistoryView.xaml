@@ -1,0 +1,107 @@
+<UserControl x:Class="PerfMonitorLive.UI.HistoryView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:local="clr-namespace:PerfMonitorLive.UI">
+    <Grid>
+        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+        <!-- barre d'outils -->
+        <Border Background="{DynamicResource PanelBrush}" CornerRadius="12" Padding="12,10" BorderBrush="{DynamicResource GridBrush}" BorderThickness="1" Margin="0,0,0,10">
+            <StackPanel>
+                <DockPanel>
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                        <TextBlock Text="Plage :" Foreground="{DynamicResource MutedBrush}" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                        <Button Content="1 h" Tag="1" Click="Range_Click" Padding="10,4" Margin="0,0,4,0"/>
+                        <Button Content="6 h" Tag="6" Click="Range_Click" Padding="10,4" Margin="0,0,4,0"/>
+                        <Button Content="24 h" Tag="24" Click="Range_Click" Padding="10,4" Margin="0,0,4,0"/>
+                        <Button Content="7 j" Tag="168" Click="Range_Click" Padding="10,4" Margin="0,0,12,0"/>
+                        <TextBlock x:Name="RangeText" Foreground="{DynamicResource MutedBrush}" VerticalAlignment="Center"/>
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                        <Button Content="🔄 Actualiser" Click="Refresh_Click" Padding="10,4" Margin="0,0,6,0"/>
+                        <Button Content="➕ Marquer un réglage" Click="Mark_Click" Padding="10,4" Margin="0,0,6,0"/>
+                        <Button Content="📊 Rapport HTML" Click="Report_Click" Padding="10,4"/>
+                    </StackPanel>
+                </DockPanel>
+                <WrapPanel x:Name="MetricPicks" Margin="0,8,0,0"/>
+                <TextBlock Foreground="{DynamicResource MutedBrush}" FontSize="11.5" Margin="0,6,0,0" Text="Molette = zoom autour du curseur · glisser = déplacer · survol = valeurs · traits verticaux = marqueurs de réglage"/>
+            </StackPanel>
+        </Border>
+        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+            <StackPanel>
+                <StackPanel x:Name="Charts"/>
+                <!-- comparaison avant / après -->
+                <Border Background="{DynamicResource PanelBrush}" CornerRadius="12" Padding="14" BorderBrush="{DynamicResource GridBrush}" BorderThickness="1" Margin="0,0,0,10">
+                    <StackPanel>
+                        <TextBlock Text="🔬  Comparer avant / après un réglage" FontSize="15" FontWeight="SemiBold" Foreground="{DynamicResource FgBrush}"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,8,0,8">
+                            <TextBlock Text="Marqueur :" Foreground="{DynamicResource MutedBrush}" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                            <ComboBox x:Name="MarkerCombo" Width="360" SelectionChanged="Compare_Changed"/>
+                            <TextBlock Text="Fenêtre (min) :" Foreground="{DynamicResource MutedBrush}" VerticalAlignment="Center" Margin="12,0,6,0"/>
+                            <TextBox x:Name="WindowBox" Text="30" Width="50" TextAlignment="Right" LostFocus="Compare_Changed"/>
+                        </StackPanel>
+                        <ItemsControl x:Name="CompareRows">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Grid Margin="0,3">
+                                        <Grid.ColumnDefinitions><ColumnDefinition Width="230"/><ColumnDefinition Width="150"/><ColumnDefinition Width="150"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                                        <TextBlock Text="{Binding Name}" Foreground="{DynamicResource FgBrush}"/>
+                                        <TextBlock Grid.Column="1" Text="{Binding Before}" Foreground="{DynamicResource MutedBrush}"/>
+                                        <TextBlock Grid.Column="2" Text="{Binding After}" Foreground="{DynamicResource MutedBrush}"/>
+                                        <TextBlock Grid.Column="3" Text="{Binding Delta}" Foreground="{Binding DeltaBrush}" FontWeight="SemiBold"/>
+                                    </Grid>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                        <TextBlock x:Name="CompareHint" Foreground="{DynamicResource MutedBrush}" Text="Ajoute un marqueur avant/après un réglage (bouton ci-dessus ou .\note.ps1) puis sélectionne-le ici." Margin="0,4,0,0"/>
+                    </StackPanel>
+                </Border>
+                <!-- démarrages -->
+                <Border Background="{DynamicResource PanelBrush}" CornerRadius="12" Padding="14" BorderBrush="{DynamicResource GridBrush}" BorderThickness="1" Margin="0,0,0,10">
+                    <StackPanel>
+                        <TextBlock Text="🚀  Démarrages de Windows" FontSize="15" FontWeight="SemiBold" Foreground="{DynamicResource FgBrush}"/>
+                        <TextBlock x:Name="BootSummary" Foreground="{DynamicResource MutedBrush}" Margin="0,4,0,8"/>
+                        <local:BarStrip x:Name="BootBars" Height="90" Margin="0,0,0,8"/>
+                        <ItemsControl x:Name="BootRows">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Grid Margin="0,3">
+                                        <Grid.ColumnDefinitions><ColumnDefinition Width="170"/><ColumnDefinition Width="90"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                                        <TextBlock Text="{Binding When}" Foreground="{DynamicResource MutedBrush}"/>
+                                        <TextBlock Grid.Column="1" Text="{Binding Dur}" Foreground="{Binding Brush}" FontWeight="SemiBold"/>
+                                        <TextBlock Grid.Column="2" Text="{Binding Slow}" Foreground="{DynamicResource FgBrush}" TextTrimming="CharacterEllipsis"/>
+                                    </Grid>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
+                </Border>
+                <!-- sessions de jeu + alertes -->
+                <Grid Margin="0,0,0,10">
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                    <Border Background="{DynamicResource PanelBrush}" CornerRadius="12" Padding="14" BorderBrush="{DynamicResource GridBrush}" BorderThickness="1" Margin="0,0,5,0">
+                        <StackPanel>
+                            <TextBlock Text="🎮  Sessions de jeu" FontSize="15" FontWeight="SemiBold" Foreground="{DynamicResource FgBrush}" Margin="0,0,0,6"/>
+                            <ItemsControl x:Name="SessionRows">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate><TextBlock Text="{Binding}" Foreground="{DynamicResource FgBrush}" Margin="0,2" TextWrapping="Wrap"/></DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                            <TextBlock x:Name="SessionsEmpty" Foreground="{DynamicResource MutedBrush}" Text="Aucune session sur la plage."/>
+                        </StackPanel>
+                    </Border>
+                    <Border Grid.Column="1" Background="{DynamicResource PanelBrush}" CornerRadius="12" Padding="14" BorderBrush="{DynamicResource GridBrush}" BorderThickness="1" Margin="5,0,0,0">
+                        <StackPanel>
+                            <TextBlock Text="🔔  Alertes" FontSize="15" FontWeight="SemiBold" Foreground="{DynamicResource FgBrush}" Margin="0,0,0,6"/>
+                            <ItemsControl x:Name="AlertRows">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate><TextBlock Text="{Binding}" Foreground="{DynamicResource FgBrush}" Margin="0,2" TextWrapping="Wrap"/></DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                            <TextBlock x:Name="AlertsEmpty" Foreground="{DynamicResource MutedBrush}" Text="Aucune alerte sur la plage."/>
+                        </StackPanel>
+                    </Border>
+                </Grid>
+            </StackPanel>
+        </ScrollViewer>
+    </Grid>
+</UserControl>

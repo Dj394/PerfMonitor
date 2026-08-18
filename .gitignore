@@ -1,0 +1,14 @@
+# Données locales de la machine (historique, log, inventaire) et réglages personnels
+data/
+settings.json
+dashboard.html
+
+# Sorties de compilation
+app/bin/
+app/obj/
+app/publish/
+*.user
+.vs/
+
+# Binaire : distribué via les Releases GitHub (build.ps1 le régénère)
+PerfMonitorLive.exe
