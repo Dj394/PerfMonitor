@@ -30,8 +30,11 @@ namespace PerfMonitorLive.UI
             try
             {
                 var scr = _app.Toasts.TargetScreen();
-                string scrName = scr == null ? null : (scr.Primary ? "l'écran principal" : "l'écran secondaire") + " (" + scr.Bounds.Width + "×" + scr.Bounds.Height + ")";
-                _welcome = new WelcomeWindow(Inventory.Current, scrName) { Owner = this };
+                bool multi = System.Windows.Forms.Screen.AllScreens.Length > 1;
+                string scrName = scr == null || !multi ? null : scr.Primary ? "l'écran principal" : "l'écran secondaire";
+                var c = _app.Settings.Corner ?? "BottomRight";
+                string corner = c == "TopRight" ? "en haut à droite" : c == "BottomLeft" ? "en bas à gauche" : c == "TopLeft" ? "en haut à gauche" : "en bas à droite";
+                _welcome = new WelcomeWindow(Inventory.Current, corner + (scrName != null ? " de " + scrName : "")) { Owner = this };
                 _welcome.ShowAgain.IsChecked = false;
                 _welcome.ShowDialog();
                 _app.Settings.WelcomeShown = !_welcome.ShowNextTime; _app.Settings.Save();
