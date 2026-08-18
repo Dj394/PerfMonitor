@@ -52,10 +52,22 @@ namespace PerfMonitorLive.Metrics
             {
                 try
                 {
+                    bool mbDue = (DateTime.Now - _mbTime).TotalSeconds >= 5;   // carte mère (ventilateurs) : lecture SuperIO coûteuse, toutes les 5 s
                     foreach (var h in _pc.Hardware)
                     {
+                        if (h.HardwareType == HardwareType.Motherboard)
+                        {
+                            if (mbDue)
+                            {
+                                h.Update(); foreach (var sub in h.SubHardware) sub.Update();
+                                _mbTime = DateTime.Now; var tmp = new Reading();
+                                AddFans(h, "", tmp); foreach (var sub in h.SubHardware) AddFans(sub, "", tmp);
+                                _mbFans = tmp.Fans;
+                            }
+                            r.Fans.AddRange(_mbFans);
+                            continue;
+                        }
                         h.Update();
-                        foreach (var sub in h.SubHardware) sub.Update();
                         switch (h.HardwareType)
                         {
                             case HardwareType.Cpu:
@@ -69,10 +81,6 @@ namespace PerfMonitorLive.Metrics
                                 r.GpuW = Pick(h, SensorType.Power, "GPU Package", "GPU Core", "GPU Total") ?? Max(h, SensorType.Power);
                                 AddFans(h, "GPU", r);
                                 break;
-                            case HardwareType.Motherboard:
-                                AddFans(h, "", r);
-                                foreach (var sub in h.SubHardware) AddFans(sub, "", r);
-                                break;
                         }
                     }
                 }
@@ -82,6 +90,7 @@ namespace PerfMonitorLive.Metrics
             return r;
         }
 
+        DateTime _mbTime = DateTime.MinValue; List<FanSample> _mbFans = new List<FanSample>();
         static void AddFans(IHardware h, string prefix, Reading r)
         {
             foreach (var s in h.Sensors.Where(x => x.SensorType == SensorType.Fan && x.Value.HasValue))
@@ -113,7 +122,7 @@ namespace PerfMonitorLive.Metrics
         void ReadStorageWmi(Reading r)
         {
             if (!IsElevated) return;
-            if ((DateTime.Now - _storTime).TotalSeconds >= 5)
+            if ((DateTime.Now - _storTime).TotalSeconds >= 30)   // SMART : lent à évoluer, toutes les 30 s
             {
                 _storTime = DateTime.Now;
                 var list = new List<StorSample>();

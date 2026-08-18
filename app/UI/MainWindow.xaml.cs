@@ -225,6 +225,7 @@ namespace PerfMonitorLive.UI
                 Upd("disk.lat:" + d.n, d.lat, (d.lat < 10 ? d.lat.ToString("0.0") : d.lat.ToString("0")) + " ms", "");
             }
             ExtrasOnSample(smp);
+            MachineOnSample();
             if (!IsVisible) return;
             for (int i = 0; i < smp.procs.Count; i++)
             {

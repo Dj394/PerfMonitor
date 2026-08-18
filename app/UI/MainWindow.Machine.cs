@@ -21,6 +21,14 @@ namespace PerfMonitorLive.UI
         }
 
         public void RefreshMachine() => RenderMachine(Inventory.Current);
+        DateTime _selfCostShown = DateTime.MinValue;
+        /// <summary>Met à jour la ligne « coût de PerfMonitor » de l'onglet Machine (toutes les 30 s, si l'onglet est visible).</summary>
+        void MachineOnSample()
+        {
+            var smp = _app.Sampler; if (smp.SelfMemMB <= 0) return;
+            SelfCost = smp.SelfCpuPct.ToString("0.0") + " % CPU · " + smp.SelfMemMB.ToString("0") + " Mo · " + (_app.EcoActive ? "mode économie (2 s)" : "mesure toutes les " + (smp.IntervalMs / 1000.0).ToString("0.#") + " s");
+            if (IsVisible && (DateTime.Now - _selfCostShown).TotalSeconds >= 30 && MachinePanel.IsVisible) { _selfCostShown = DateTime.Now; RenderMachine(Inventory.Current); }
+        }
         void MachineScan_Click(object s, RoutedEventArgs e)
         {
             if (_scanning) return;
@@ -90,9 +98,11 @@ namespace PerfMonitorLive.UI
             Add(cap, "SMART / temp. disques", m.CapStorTemp ? "✅" : "❌");
             Add(cap, "Consommation (W)", m.CapPower ? "✅" : "❌");
             Add(cap, "Fréquences", m.CapClocks ? "✅" : "❌");
+            Add(cap, "Coût de PerfMonitor", SelfCost);
             Add(cap, "Dernier scan", m.ScannedAt == default(DateTime) ? null : m.ScannedAt.ToString("dd/MM/yyyy HH:mm") + " (" + m.ScanMs + " ms)");
             return secs;
         }
+        static string SelfCost;
         public static string VendorName(Vendor v) => v == Vendor.Amd ? "AMD" : v == Vendor.Intel ? "Intel" : v == Vendor.Nvidia ? "NVIDIA" : v == Vendor.Qualcomm ? "Qualcomm" : "—";
 
         void RenderMachine(MachineInfo m)

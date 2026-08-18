@@ -13,6 +13,11 @@ namespace PerfMonitorLive.Metrics
     {
         public event Action<Sample> SampleReady;
         readonly Thread _thread; volatile bool _run = true;
+        /// <summary>Période d'échantillonnage (1000 ms normal, 2000 ms en mode économie).</summary>
+        public volatile int IntervalMs = 1000;
+        /// <summary>Coût de PerfMonitor lui-même (dernière mesure).</summary>
+        public double SelfCpuPct { get; private set; }
+        public double SelfMemMB { get; private set; }
         readonly int _cores = Environment.ProcessorCount;
         double _totalMB;
         List<ProcSample> _lastProcs = new List<ProcSample>();
@@ -43,7 +48,8 @@ namespace PerfMonitorLive.Metrics
                 try { var s = Collect(t0); SampleReady?.Invoke(s); }
                 catch (Exception ex) { Paths.Log("Sample: " + ex.Message); }
                 var el = (DateTime.Now - t0).TotalMilliseconds;
-                if (el < 1000) Thread.Sleep((int)(1000 - el));
+                int period = IntervalMs;
+                if (el < period) Thread.Sleep((int)(period - el));
             }
         }
 
@@ -76,14 +82,9 @@ namespace PerfMonitorLive.Metrics
             }
             s.rx = Math.Round(rx / 1024, 1); s.tx = Math.Round(tx / 1024, 1);
 
-            if ((now - _lastProcTime).TotalSeconds >= 3)
+            if ((now - _lastProcTime).TotalSeconds >= 5)
             {
-                var list = new List<ProcSample>();
-                foreach (var o in Query("SELECT Name,IDProcess,PercentProcessorTime,WorkingSetPrivate,HandleCount FROM Win32_PerfFormattedData_PerfProc_Process"))
-                {
-                    var name = (string)o["Name"]; if (name == "_Total" || name == "Idle") continue;
-                    list.Add(new ProcSample { n = ProcSuffix.Replace(name, ""), Pid = (int)D(o["IDProcess"]), cpu = Math.Round(D(o["PercentProcessorTime"]) / _cores, 1), mem = Math.Round(D(o["WorkingSetPrivate"]) / 1048576.0), h = D(o["HandleCount"]) });
-                }
+                var list = CollectProcesses(now);
                 _lastProcs = list.OrderByDescending(p => p.cpu).ThenByDescending(p => p.mem).Take(6).ToList();
                 _lastProcTime = now;
                 Leaks.Feed(now, list);
@@ -107,6 +108,41 @@ namespace PerfMonitorLive.Metrics
                 _tempTried = true;
             }
             return s;
+        }
+
+        // --- Processus via l'API .NET (bien moins coûteux que Win32_PerfFormattedData_PerfProc_Process) : % CPU = delta temps CPU / delta temps réel
+        readonly Dictionary<int, KeyValuePair<DateTime, TimeSpan>> _procCpu = new Dictionary<int, KeyValuePair<DateTime, TimeSpan>>();
+        readonly int _selfPid = System.Diagnostics.Process.GetCurrentProcess().Id;
+        List<ProcSample> CollectProcesses(DateTime now)
+        {
+            var list = new List<ProcSample>();
+            var seen = new HashSet<int>();
+            foreach (var p in System.Diagnostics.Process.GetProcesses())
+            {
+                using (p)
+                {
+                    try
+                    {
+                        int pid = p.Id; if (pid == 0) continue;
+                        seen.Add(pid);
+                        TimeSpan cpuT; try { cpuT = p.TotalProcessorTime; } catch { cpuT = TimeSpan.Zero; }
+                        double pct = 0;
+                        if (_procCpu.TryGetValue(pid, out var prev))
+                        {
+                            var wall = (now - prev.Key).TotalSeconds;
+                            if (wall > 0.5) pct = Math.Max(0, (cpuT - prev.Value).TotalSeconds / wall / _cores * 100);
+                        }
+                        _procCpu[pid] = new KeyValuePair<DateTime, TimeSpan>(now, cpuT);
+                        double memMB = p.PrivateMemorySize64 / 1048576.0;
+                        list.Add(new ProcSample { n = p.ProcessName, Pid = pid, cpu = Math.Round(pct, 1), mem = Math.Round(memMB), h = p.HandleCount });
+                        if (pid == _selfPid) { SelfCpuPct = Math.Round(pct, 2); SelfMemMB = Math.Round(memMB); }
+                    }
+                    catch { }
+                }
+            }
+            foreach (var dead in _procCpu.Keys.Where(k => !seen.Contains(k)).ToList()) _procCpu.Remove(dead);
+            // regroupe les instances d'un même programme (comme WMI ramenait chrome#1, chrome#2… à « chrome ») : le top et le détecteur de fuites suivent le programme
+            return list.GroupBy(x => x.n).Select(g => new ProcSample { n = g.Key, Pid = g.OrderByDescending(x => x.cpu).First().Pid, cpu = Math.Round(g.Sum(x => x.cpu), 1), mem = g.Sum(x => x.mem), h = g.Sum(x => x.h) }).ToList();
         }
 
         /// <summary>Batterie (portables) : Win32_Battery toutes les 20 s ; ignoré si absente.</summary>

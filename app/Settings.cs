@@ -160,7 +160,8 @@ namespace PerfMonitorLive
         public bool TelegramDigest { get; set; } = true;
         public bool DigestEnabled { get; set; } = true;
         public string LastDigestDate { get; set; }               // yyyy-MM-dd
-        public bool MachineTuned { get; set; }                   // seuils par défaut adaptés au matériel (portable, HDD/SSD…) déjà appliqués
+        public bool MachineTuned { get; set; }
+        public bool EcoAuto { get; set; } = true;                // mode économie : 1 mesure / 2 s sur batterie ou fenêtre fermée > 5 min                   // seuils par défaut adaptés au matériel (portable, HDD/SSD…) déjà appliqués
 
         static readonly JsonSerializerOptions Opts = new JsonSerializerOptions { WriteIndented = true, NumberHandling = JsonNumberHandling.AllowNamedFloatingPointLiterals };
         static readonly object Lock = new object();

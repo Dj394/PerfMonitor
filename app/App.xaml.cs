@@ -112,10 +112,27 @@ namespace PerfMonitorLive
         {
             if (Settings.ApplyMachine(m)) { Paths.Log("Seuils par défaut adaptés au matériel (" + m.KindText + ", CPU " + m.Cpu.Vendor + ", GPU " + m.GpuVendor + ")"); _main.RebuildCards(); OnSettingsChanged(); }
         }
+        DateTime? _mainHiddenSince; bool _eco;
+        /// <summary>Mode économie : 2 s entre deux mesures si l'option est active et (sur batterie, ou rien de visible depuis > 5 min).</summary>
+        void UpdateEco()
+        {
+            bool visible = (_main != null && _main.IsVisible && _main.WindowState != WindowState.Minimized) || (_widget != null && _widget.IsVisible) || (_overlay != null && _overlay.IsVisible) || Games.Active;
+            if (visible) _mainHiddenSince = null; else if (_mainHiddenSince == null) _mainHiddenSince = DateTime.Now;
+            bool onBattery = false;
+            try { onBattery = System.Windows.Forms.SystemInformation.PowerStatus.PowerLineStatus == System.Windows.Forms.PowerLineStatus.Offline; } catch { }
+            bool eco = Settings.EcoAuto && !visible && (onBattery || (_mainHiddenSince.HasValue && (DateTime.Now - _mainHiddenSince.Value).TotalMinutes >= 5));
+            if (eco != _eco)
+            {
+                _eco = eco; _sampler.IntervalMs = eco ? 2000 : 1000;
+                Paths.Log(eco ? "Mode économie : mesure toutes les 2 s" + (onBattery ? " (batterie)" : " (fenêtre fermée)") : "Mode normal : mesure toutes les 1 s");
+            }
+        }
+        public bool EcoActive => _eco;
         void SlowTick()
         {
             try
             {
+                UpdateEco();
                 Games.Tick(_last);
                 if (Settings.ProfileAuto) ApplyAutoProfile();
                 if ((DateTime.Now - _lastHourly).TotalMinutes >= 10) { _lastHourly = DateTime.Now; MaybeDigest(); }
@@ -330,7 +347,7 @@ namespace PerfMonitorLive
             try { Process.Start(new ProcessStartInfo("powershell.exe", "-NoProfile -ExecutionPolicy Bypass -File \"" + Paths.ReportScript + "\" -Hours 24") { WindowStyle = ProcessWindowStyle.Hidden, UseShellExecute = false, CreateNoWindow = true }); }
             catch (Exception ex) { Paths.Log("Report: " + ex.Message); }
         }
-        void ShowMain() { _main.Show(); if (_main.WindowState == WindowState.Minimized) _main.WindowState = WindowState.Normal; _main.Activate(); }
+        void ShowMain() { if (_eco) { _eco = false; _sampler.IntervalMs = 1000; } _main.Show(); if (_main.WindowState == WindowState.Minimized) _main.WindowState = WindowState.Normal; _main.Activate(); }
         void ToggleMain() { if (_main.IsVisible && _main.WindowState != WindowState.Minimized) _main.Hide(); else ShowMain(); }
         void Quit()
         {

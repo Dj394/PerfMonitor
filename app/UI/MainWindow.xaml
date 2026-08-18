@@ -470,6 +470,8 @@
                             <CheckBox IsChecked="{Binding StartWithWindows}" Content="Lancer PerfMonitor Live avec Windows (réduit dans la zone de notification)"/>
                             <CheckBox IsChecked="{Binding ShowAdvisor}" Content="Afficher le conseiller (mascotte et bulles de conseils sur l'onglet Live)" Margin="0,8,0,0"/>
                             <Button Content="Réafficher tous les conseils écartés" HorizontalAlignment="Left" Margin="0,10,0,0" Click="AdvReset_Click"/>
+                            <CheckBox IsChecked="{Binding EcoAuto}" Content="Mode économie automatique : 1 mesure toutes les 2 s (au lieu de 1 s) sur batterie ou fenêtre fermée depuis plus de 5 min" Margin="0,12,0,0"/>
+                            <TextBlock Style="{StaticResource Hint}" Text="L'historique (5 s), les alertes et les rapports ne changent pas ; seule la fluidité du Live est réduite quand personne ne le regarde. Retour à 1 s dès que la fenêtre s'ouvre."/>
                             <TextBlock Style="{StaticResource Hint}" Margin="0,12,0,0" Text="L'historique est enregistré toutes les 5 s dans le dossier data\. Fermer la fenêtre ne quitte pas l'application (elle reste dans la zone de notification)."/>
                         </StackPanel>
                     </Border>

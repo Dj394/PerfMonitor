@@ -216,6 +216,7 @@ namespace PerfMonitorLive.UI
         public bool NotifyRecovery { get => _s.NotifyRecovery; set { _s.NotifyRecovery = value; Save(); Raise(); } }
         public bool StartWithWindows { get => _s.StartWithWindows; set { _s.StartWithWindows = value; Save(); Raise(); } }
         public bool ShowAdvisor { get => _s.ShowAdvisor; set { _s.ShowAdvisor = value; Save(); Raise(); } }
+        public bool EcoAuto { get => _s.EcoAuto; set { _s.EcoAuto = value; Save(); Raise(); } }
         // profils
         public bool ProfileAuto { get => _s.ProfileAuto; set { _s.ProfileAuto = value; Save(); Raise(); } }
         public string NightStart { get => _s.NightStart.ToString(); set { if (int.TryParse(value, out var i) && i >= 0 && i <= 23) { _s.NightStart = i; Save(); } Raise(); } }
