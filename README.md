@@ -3,9 +3,9 @@
 Supervision temps réel d'un PC Windows (CPU, RAM, disques, températures, ventilateurs, GPU, réseau, batterie) avec alertes, historique, détecteur de fuites mémoire et un **conseiller** qui explique quoi régler. S'adapte automatiquement à la machine sur laquelle il tourne (fixe/portable, AMD/Intel, NVIDIA/AMD/Intel, NVMe/SSD/HDD).
 
 ## Installation rapide (utilisateur)
-1. Télécharger **`PerfMonitor-x.y.z.zip`** dans la dernière **[Release](https://github.com/Dj394/PerfMonitor/releases/latest)** (ou `-portable.zip` si le [.NET 10 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/10.0) n'est pas installé — le portable l'inclut).
+1. Télécharger **`PerfMonitor-x.y.z.zip`** dans la dernière **[Release](https://github.com/Dj394/PerfMonitor/releases/latest)** (`-portable.zip` seulement pour une machine sans Internet : il embarque le runtime).
 2. Décompresser **tout** le zip dans un dossier définitif (ex. `C:\PerfMonitor`) : l'application y écrit ses réglages et son historique.
-3. Double-clic sur **`Installer.cmd`** → une invite UAC (l'appli lit les capteurs en administrateur ; PawnIO proposé s'il manque). Ça crée la tâche planifiée « PerfMonitorLive » (démarrage à l'ouverture de session) et les raccourcis Bureau / menu Démarrer.
+3. Double-clic sur **`Installer.cmd`** → une invite UAC (l'appli lit les capteurs en administrateur). Le script installe **le runtime .NET 10** s'il manque (silencieux, Microsoft) et propose **PawnIO**. Ça crée la tâche planifiée « PerfMonitorLive » (démarrage à l'ouverture de session) et les raccourcis Bureau / menu Démarrer.
 4. SmartScreen au premier lancement (exe non signé) → *Informations complémentaires* › *Exécuter quand même*. L'onglet **Machine** montre ce qui a été détecté ; ensuite les mises à jour s'installent seules.
 
 Désinstaller : `Desinstaller.cmd` (tâche planifiée + raccourcis), puis supprimer le dossier. Rien n'est écrit ailleurs que dans le dossier de l'application (`data\`, `settings.json`).

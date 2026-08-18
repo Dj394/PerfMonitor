@@ -4,13 +4,13 @@ PerfMonitor Live - installation
    L'application y ecrira ses reglages et son historique (dossier data\).
 2. Double-cliquez sur Installer.cmd
    - acceptez l'invite "Controle de compte d'utilisateur" (l'application lit les capteurs en administrateur)
+   - le runtime .NET 10 (Microsoft) est installe automatiquement s'il manque
    - si PawnIO est propose, acceptez : sans lui, pas de temperature/ventilateurs CPU (le reste fonctionne)
    - SmartScreen au premier lancement : "Informations complementaires" puis "Executer quand meme" (exe non signe)
 3. C'est tout : PerfMonitor demarre, se lance a chaque ouverture de session (icone dans la zone de notification)
    et se met a jour tout seul quand une nouvelle version sort.
 
-Prerequis : Windows 10/11 64 bits + .NET 10 Desktop Runtime (https://dotnet.microsoft.com/download/dotnet/10.0, "Run desktop apps" x64).
-Pas envie de l'installer ? Prenez le zip "portable" : meme chose, sans prerequis.
+Prerequis : Windows 10/11 64 bits (le runtime .NET 10 est installe par Installer.cmd s'il manque ; sans Internet, prenez le zip "portable" qui l'embarque).
 
 Desinstaller : Desinstaller.cmd (puis supprimer le dossier).
 Un souci ? Onglet Machine > Copier, et le fichier data\live.log : https://github.com/Dj394/PerfMonitor/issues

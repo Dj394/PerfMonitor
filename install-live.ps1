@@ -8,7 +8,33 @@ if (-not $isAdmin) {
     Start-Process powershell.exe -Verb RunAs -Wait -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`""
     exit
 }
-# 0) PawnIO : depuis la version 0.9.5, LibreHardwareMonitor n'embarque plus de pilote noyau et passe par lui.
+# 0a) Runtime .NET 10 Desktop (x64) : requis par l'exe standard (l'exe "portable" l'embarque). Installe en silencieux s'il manque.
+$isPortable = (Get-Item $exe).Length -gt 50MB
+$net10 = Test-Path (Join-Path $env:ProgramFiles 'dotnet\shared\Microsoft.WindowsDesktop.App.*')
+if (-not $isPortable -and -not $net10) {
+    Write-Host ""
+    Write-Host "Le runtime .NET 10 Desktop n'est pas installe : installation automatique (Microsoft, silencieuse, ~60 Mo)..."
+    $done = $false
+    if (Get-Command winget -ErrorAction SilentlyContinue) {
+        try { & winget install --id Microsoft.DotNet.DesktopRuntime.10 --exact --silent --accept-source-agreements --accept-package-agreements | Out-Null; $done = Test-Path (Join-Path $env:ProgramFiles 'dotnet\shared\Microsoft.WindowsDesktop.App.*') } catch { }
+    }
+    if (-not $done) {
+        $tmp = Join-Path $env:TEMP 'windowsdesktop-runtime-10-win-x64.exe'
+        try {
+            Invoke-WebRequest -Uri 'https://aka.ms/dotnet/10.0/windowsdesktop-runtime-win-x64.exe' -OutFile $tmp -UseBasicParsing
+            $sig = Get-AuthenticodeSignature $tmp
+            if ($sig.Status -ne 'Valid' -or $sig.SignerCertificate.Subject -notmatch 'Microsoft') { Write-Warning "Signature $($sig.Status) : installation annulee. Fichier conserve : $tmp" }
+            else {
+                $p = Start-Process $tmp -ArgumentList '/install /quiet /norestart' -Wait -PassThru
+                $done = Test-Path (Join-Path $env:ProgramFiles 'dotnet\shared\Microsoft.WindowsDesktop.App.*')
+                if (-not $done) { Write-Warning "L'installeur .NET a renvoye le code $($p.ExitCode)." }
+            }
+        } catch { Write-Warning "Telechargement impossible ($($_.Exception.Message))." }
+    }
+    if ($done) { Write-Host ".NET 10 Desktop Runtime installe." }
+    else { Write-Warning "Runtime .NET 10 absent : PerfMonitor ne pourra pas demarrer. Installez-le depuis https://dotnet.microsoft.com/download/dotnet/10.0 (Run desktop apps, x64) ou utilisez le zip 'portable'."; Read-Host "Entree pour continuer quand meme"; }
+}
+# 0b) PawnIO : depuis la version 0.9.5, LibreHardwareMonitor n'embarque plus de pilote noyau et passe par lui.
 # Sans PawnIO : ni temperature, ni frequence, ni consommation CPU, ni ventilateurs (le GPU et le SMART restent lisibles).
 $pawn = (Test-Path (Join-Path $env:ProgramFiles 'PawnIO\PawnIOLib.dll')) -or [bool](Get-Service PawnIO -ErrorAction SilentlyContinue)
 if (-not $pawn) {
