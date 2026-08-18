@@ -16,5 +16,7 @@ if ($Zip) {
     $name = "PerfMonitor-$ver" + $(if ($Portable) { '-portable' } else { '' }) + '.zip'
     $files = @('PerfMonitorLive.exe','install-live.ps1','report.ps1','template.html','note.ps1','Installer.cmd','Desinstaller.cmd','LISEZMOI.txt') | ForEach-Object { Join-Path $PSScriptRoot $_ } | Where-Object { Test-Path $_ }
     Compress-Archive -Path $files -DestinationPath (Join-Path $PSScriptRoot $name) -Force
-    Write-Host "ZIP -> $PSScriptRoot\$name"
+    $fixed = 'PerfMonitor' + $(if ($Portable) { '-portable' } else { '' }) + '.zip'   # nom fixe : lien stable .../releases/latest/download/PerfMonitor.zip
+    Copy-Item (Join-Path $PSScriptRoot $name) (Join-Path $PSScriptRoot $fixed) -Force
+    Write-Host "ZIP -> $PSScriptRoot\$name  (+ copie $fixed)"
 }
