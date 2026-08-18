@@ -12,13 +12,18 @@ if (-not $isAdmin) {
 Get-ChildItem $PSScriptRoot -File | Unblock-File -ErrorAction SilentlyContinue
 # 0a) Runtime .NET 10 Desktop (x64) : requis par l'exe standard (l'exe "portable" l'embarque). Installe en silencieux s'il manque.
 $isPortable = (Get-Item $exe).Length -gt 50MB
-$net10 = Test-Path (Join-Path $env:ProgramFiles 'dotnet\shared\Microsoft.WindowsDesktop.App.*')
+function Test-Net10 {   # runtime .NET 10 Desktop x64 present ? (sans joker : Test-Path plante si le dossier parent n'existe pas)
+    $d = Join-Path $env:ProgramFiles 'dotnet\shared\Microsoft.WindowsDesktop.App'
+    if (-not (Test-Path -LiteralPath $d)) { return $false }
+    return [bool](Get-ChildItem -LiteralPath $d -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -like '10.*' })
+}
+$net10 = Test-Net10
 if (-not $isPortable -and -not $net10) {
     Write-Host ""
     Write-Host "Le runtime .NET 10 Desktop n'est pas installe : installation automatique (Microsoft, silencieuse, ~60 Mo)..."
     $done = $false
     if (Get-Command winget -ErrorAction SilentlyContinue) {
-        try { & winget install --id Microsoft.DotNet.DesktopRuntime.10 --exact --silent --accept-source-agreements --accept-package-agreements | Out-Null; $done = Test-Path (Join-Path $env:ProgramFiles 'dotnet\shared\Microsoft.WindowsDesktop.App.*') } catch { }
+        try { & winget install --id Microsoft.DotNet.DesktopRuntime.10 --exact --silent --accept-source-agreements --accept-package-agreements | Out-Null; $done = Test-Net10 } catch { }
     }
     if (-not $done) {
         $tmp = Join-Path $env:TEMP 'windowsdesktop-runtime-10-win-x64.exe'
@@ -28,7 +33,7 @@ if (-not $isPortable -and -not $net10) {
             if ($sig.Status -ne 'Valid' -or $sig.SignerCertificate.Subject -notmatch 'Microsoft') { Write-Warning "Signature $($sig.Status) : installation annulee. Fichier conserve : $tmp" }
             else {
                 $p = Start-Process $tmp -ArgumentList '/install /quiet /norestart' -Wait -PassThru
-                $done = Test-Path (Join-Path $env:ProgramFiles 'dotnet\shared\Microsoft.WindowsDesktop.App.*')
+                $done = Test-Net10
                 if (-not $done) { Write-Warning "L'installeur .NET a renvoye le code $($p.ExitCode)." }
             }
         } catch { Write-Warning "Telechargement impossible ($($_.Exception.Message))." }
