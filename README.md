@@ -3,13 +3,12 @@
 Supervision temps réel d'un PC Windows (CPU, RAM, disques, températures, ventilateurs, GPU, réseau, batterie) avec alertes, historique, détecteur de fuites mémoire et un **conseiller** qui explique quoi régler. S'adapte automatiquement à la machine sur laquelle il tourne (fixe/portable, AMD/Intel, NVIDIA/AMD/Intel, NVMe/SSD/HDD).
 
 ## Installation rapide (utilisateur)
-1. Prérequis : Windows 10/11 x64 et le **[.NET 10 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/10.0)** (« Run desktop apps » x64) — ou prendre la variante *Portable* de la Release, qui l'inclut.
-   Pour les **températures / fréquences / consommation CPU et les ventilateurs**, installer aussi **[PawnIO](https://pawnio.eu)** : depuis sa version 0.9.5, LibreHardwareMonitor n'embarque plus de pilote noyau et passe par lui. Sans PawnIO l'application fonctionne, mais ces capteurs restent vides (le GPU, le SMART et tout le reste continuent de remonter). L'onglet **Machine** indique s'il est présent.
-2. Télécharger la dernière **[Release](https://github.com/Dj394/PerfMonitor/releases/latest)** (`PerfMonitorLive.exe`) et la placer dans un dossier de votre choix avec `install-live.ps1`, `report.ps1`, `template.html`, `note.ps1` (ou cloner ce dépôt et lancer `.uild.ps1` — nécessite le SDK .NET 10).
-3. Clic droit sur `install-live.ps1` › *Exécuter avec PowerShell* → une invite UAC (l'appli tourne en administrateur pour lire les températures). Ça crée la tâche planifiée « PerfMonitorLive » (démarrage à l'ouverture de session) et les raccourcis Bureau / menu Démarrer.
-4. Au premier lancement : SmartScreen peut afficher « Windows a protégé votre PC » (exe non signé) → *Informations complémentaires* › *Exécuter quand même*. L'onglet **Machine** montre ce qui a été détecté et quels capteurs sont disponibles.
+1. Télécharger **`PerfMonitor-x.y.z.zip`** dans la dernière **[Release](https://github.com/Dj394/PerfMonitor/releases/latest)** (ou `-portable.zip` si le [.NET 10 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/10.0) n'est pas installé — le portable l'inclut).
+2. Décompresser **tout** le zip dans un dossier définitif (ex. `C:\PerfMonitor`) : l'application y écrit ses réglages et son historique.
+3. Double-clic sur **`Installer.cmd`** → une invite UAC (l'appli lit les capteurs en administrateur ; PawnIO proposé s'il manque). Ça crée la tâche planifiée « PerfMonitorLive » (démarrage à l'ouverture de session) et les raccourcis Bureau / menu Démarrer.
+4. SmartScreen au premier lancement (exe non signé) → *Informations complémentaires* › *Exécuter quand même*. L'onglet **Machine** montre ce qui a été détecté ; ensuite les mises à jour s'installent seules.
 
-Désinstaller : Quitter (menu de l'icône), puis en PowerShell admin `Unregister-ScheduledTask PerfMonitorLive -Confirm:$false`, supprimer les raccourcis et le dossier. Rien n'est écrit ailleurs que dans le dossier de l'application (`data\`, `settings.json`).
+Désinstaller : `Desinstaller.cmd` (tâche planifiée + raccourcis), puis supprimer le dossier. Rien n'est écrit ailleurs que dans le dossier de l'application (`data\`, `settings.json`).
 
 Limites connues : sans **PawnIO** (voir prérequis), ou si un antivirus d'entreprise bloque son pilote, il n'y a ni température/fréquence/consommation CPU ni ventilateurs — le reste fonctionne. Sur un portable à **GPU hybride** (Optimus/Switchable), la carte graphique dédiée ne répond que lorsqu'elle est active : les cartes GPU affichent alors « GPU en veille ». Testé sur PC fixe AMD et sur portable Intel + NVIDIA ; signalez les soucis avec le contenu de l'onglet Machine (bouton **Copier**) et `data\live.log`.
 
