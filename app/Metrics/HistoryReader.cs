@@ -71,7 +71,7 @@ namespace PerfMonitorLive.Metrics
         }
 
         /// <summary>Agrège une série en seaux de <paramref name="stepSec"/> secondes.</summary>
-        public static List<Bucket> Aggregate(List<Sample> samples, string key, int stepSec)
+        public static List<Bucket> Aggregate(IEnumerable<Sample> samples, string key, int stepSec)
         {
             var res = new List<Bucket>();
             Bucket cur = null; long curSlot = long.MinValue;

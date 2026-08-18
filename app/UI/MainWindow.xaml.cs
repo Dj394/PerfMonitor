@@ -68,7 +68,7 @@ namespace PerfMonitorLive.UI
             RefreshScreens();
             SettingsPanel.DataContext = _svm;
             BuildFixedCards();
-            Closing += (s, e) => { if (!_reallyClose) { e.Cancel = true; Hide(); } };
+            Closing += (s, e) => { if (!_reallyClose) { e.Cancel = true; Hide(); History?.Release(); } };
             IsVisibleChanged += (s, e) => { if (IsVisible) { RefreshScreens(); UpdatePauseText(); UpdateProfilePill(); } };
             SourceInitialized += (s, e) => CenterOnPrimary();
             InitAdvisor();

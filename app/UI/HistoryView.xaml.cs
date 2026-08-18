@@ -29,6 +29,17 @@ namespace PerfMonitorLive.UI
 
         public HistoryView() { InitializeComponent(); IsVisibleChanged += (s, e) => { if (IsVisible && _samples.Count == 0) _ = LoadAsync(); }; }
 
+        /// <summary>Fenêtre refermée (zone de notification) : rendre les échantillons chargés (24 h = ~17 000 objets, 7 j = ~120 000).
+        /// L'onglet les recharge tout seul à la prochaine ouverture (voir le constructeur).</summary>
+        public void Release()
+        {
+            if (_loading || _samples.Count == 0) return;
+            _samples = new List<Sample>(); _notes = new List<Note>();
+            foreach (var c in _charts) c.Release();
+            System.Runtime.GCSettings.LargeObjectHeapCompactionMode = System.Runtime.GCLargeObjectHeapCompactionMode.CompactOnce;
+            GC.Collect(GC.MaxGeneration, GCCollectionMode.Aggressive, true, true);
+        }
+
         /// <summary>Déclare les métriques disponibles (mêmes clés que les cartes).</summary>
         public void SetMetrics(IEnumerable<MetricDef> defs)
         {
@@ -166,11 +177,12 @@ namespace PerfMonitorLive.UI
 
         public HistoryChart() { ClipToBounds = true; Cursor = Cursors.Cross; }
         public void SetData(List<Sample> samples, List<Note> notes, DateTime f, DateTime t) { _samples = samples; _notes = notes; SetView(f, t); }
+        public void Release() { _samples = new List<Sample>(); _notes = new List<Note>(); _b = new List<Bucket>(); InvalidateVisual(); }
         public void SetView(DateTime f, DateTime t)
         {
             _f = f; _t = t;
             int step = HistoryReader.StepFor(t - f);
-            _b = HistoryReader.Aggregate(_samples.Where(s => s.Time >= f && s.Time <= t).ToList(), Def.Key, step);
+            _b = HistoryReader.Aggregate(_samples.Where(s => s.Time >= f && s.Time <= t), Def.Key, step);
             InvalidateVisual();
         }
 
