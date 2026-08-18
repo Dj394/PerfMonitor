@@ -422,9 +422,12 @@ namespace PerfMonitorLive
             {
                 if (Hardware.IsElevated)
                 {
-                    if (Settings.StartWithWindows) Schtasks("/create /f /tn " + TaskName + " /sc onlogon /rl highest /it /tr \"\\\"" + Environment.ProcessPath + "\\\" --tray\"");
-                    else if (TaskExists()) Schtasks("/delete /f /tn " + TaskName);
-                    using (var k = Registry.CurrentUser.OpenSubKey(RunKey, true)) if (k.GetValue(RunName) != null) k.DeleteValue(RunName);
+                    // La tâche planifiée est créée par install-live.ps1. L'application ne la (re)crée que si l'option est active ET qu'elle manque
+                    // (jamais systématiquement au démarrage : un exe qui enregistre une tâche « highest » à chaque lancement est vu comme un logiciel de persistance par Defender).
+                    bool exists = TaskExists();
+                    if (Settings.StartWithWindows && !exists) Schtasks("/create /f /tn " + TaskName + " /sc onlogon /rl highest /it /tr \"\\\"" + Environment.ProcessPath + "\\\" --tray\"");
+                    else if (!Settings.StartWithWindows && exists) Schtasks("/delete /f /tn " + TaskName);
+                    using (var k = Registry.CurrentUser.OpenSubKey(RunKey, true)) if (k != null && k.GetValue(RunName) != null) k.DeleteValue(RunName);
                 }
                 else if (!TaskExists())
                 {

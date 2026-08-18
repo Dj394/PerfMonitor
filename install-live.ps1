@@ -10,6 +10,25 @@ if (-not $isAdmin) {
 }
 # 0) Retire la "marque du Web" des fichiers extraits du zip : sans elle, SmartScreen ne s'interpose plus au lancement de l'exe.
 Get-ChildItem $PSScriptRoot -File | Unblock-File -ErrorAction SilentlyContinue
+
+# 0-bis) Exclusion Windows Defender pour ce dossier.
+# Pourquoi : PerfMonitorLive.exe n'est pas signe numeriquement. L'analyse comportementale de Defender classe alors a tort
+# un programme qui lit les capteurs, tourne en administrateur et se lance a l'ouverture de session comme "logiciel de persistance"
+# (detection "Behavior:Win32/Execution.A!ml"), et peut le mettre en quarantaine. Ce n'est PAS un virus (code source public : github.com/Dj394/PerfMonitor).
+# L'exclusion ci-dessous limite ce faux positif a CE dossier uniquement ; le reste de la protection Defender n'est pas touche.
+try {
+    $excluded = @((Get-MpPreference -ErrorAction Stop).ExclusionPath)
+    if ($excluded -notcontains $PSScriptRoot) {
+        Write-Host ""
+        Write-Host "Windows Defender peut prendre cet outil (non signe) pour une menace et le supprimer." -ForegroundColor Yellow
+        $rep = Read-Host "Ajouter une exclusion Defender pour CE dossier uniquement, pour eviter ca ? [O/n]"
+        if ($rep -eq '' -or $rep -match '^[oy]') {
+            Add-MpPreference -ExclusionPath $PSScriptRoot -ErrorAction Stop
+            Add-MpPreference -ExclusionProcess 'PerfMonitorLive.exe' -ErrorAction SilentlyContinue
+            Write-Host "Exclusion ajoutee pour $PSScriptRoot" -ForegroundColor Green
+        } else { Write-Warning "Sans exclusion, Defender risque de mettre PerfMonitorLive.exe en quarantaine. Vous pourrez le restaurer dans Securite Windows > Historique de la protection." }
+    }
+} catch { Write-Warning "Exclusion Defender impossible ($($_.Exception.Message)). A ajouter au besoin dans Securite Windows > Exclusions." }
 # 0a) Runtime .NET 10 Desktop (x64) : requis par l'exe standard (l'exe "portable" l'embarque). Installe en silencieux s'il manque.
 $isPortable = (Get-Item $exe).Length -gt 50MB
 function Test-Net10 {   # runtime .NET 10 Desktop x64 present ? (sans joker : Test-Path plante si le dossier parent n'existe pas)
