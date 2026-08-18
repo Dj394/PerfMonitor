@@ -484,10 +484,12 @@
                         <StackPanel>
                             <TextBlock Text="⬆️  Mises à jour" Style="{StaticResource SectionTitle}"/>
                             <TextBlock Text="{Binding VersionText}"/>
-                            <CheckBox IsChecked="{Binding UpdateAuto}" Content="Vérifier automatiquement une fois par jour (dernière Release GitHub — rien n'est installé sans toi)" Margin="0,8,0,0"/>
+                            <CheckBox IsChecked="{Binding UpdateAuto}" Content="Vérifier automatiquement une fois par jour (dernière Release GitHub)" Margin="0,8,0,0"/>
+                            <CheckBox IsChecked="{Binding UpdateAutoInstall}" Content="Installer automatiquement : téléchargement, remplacement de l'exe et relance (jamais pendant un jeu ; 20 s pour reporter). Réglages et historique conservés." Margin="0,6,0,0"/>
                             <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
                                 <Button x:Name="UpdateBtn" Content="Vérifier maintenant" Click="Update_Click"/>
-                                <Button x:Name="UpdateOpenBtn" Content="Ouvrir la page de téléchargement" Margin="8,0,0,0" Click="UpdateOpen_Click" Visibility="Collapsed" Style="{StaticResource PrimaryButton}"/>
+                                <Button x:Name="UpdateInstallBtn" Content="Installer maintenant" Margin="8,0,0,0" Click="UpdateInstall_Click" Visibility="Collapsed" Style="{StaticResource PrimaryButton}"/>
+                                <Button x:Name="UpdateOpenBtn" Content="Ouvrir la page de téléchargement" Margin="8,0,0,0" Click="UpdateOpen_Click" Visibility="Collapsed"/>
                             </StackPanel>
                             <TextBlock x:Name="UpdateText" Style="{StaticResource Hint}"/>
                         </StackPanel>

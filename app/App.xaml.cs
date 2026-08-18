@@ -129,6 +129,63 @@ namespace PerfMonitorLive
         }
         public bool EcoActive => _eco;
 
+        // ---------------------------------------------------------------- installation automatique
+        UpdateInfo _pendingUpdate; bool _installing; string _downloadedExe;
+        DispatcherTimer _installTimer;
+        /// <summary>Télécharge la mise à jour en attente, puis prévient (20 s, reportable) et remplace l'exe. Diffère tant qu'un jeu est actif.</summary>
+        public async void InstallUpdate()
+        {
+            var info = _pendingUpdate; if (info == null || _installing) return;
+            _installing = true;
+            try
+            {
+                if (_downloadedExe == null || !System.IO.File.Exists(_downloadedExe))
+                {
+                    _main.SetUpdateStatus("Téléchargement de la " + info.Version + "…", null);
+                    var prog = new Progress<double>(p => _main.SetUpdateStatus("Téléchargement de la " + info.Version + "… " + p.ToString("0") + " %", null));
+                    _downloadedExe = await Updater.DownloadAsync(info, prog);
+                    Paths.Log("MAJ " + info.Version + " téléchargée : " + _downloadedExe);
+                }
+                if (Games.Active) { _main.SetUpdateStatus("Mise à jour " + info.Version + " téléchargée : installation à la fin du jeu.", null); _installing = false; ScheduleInstallRetry(); return; }
+                int left = 20;
+                var a = new AlertInfo { RuleId = "update", Time = DateTime.Now, Severity = Severity.Info, Title = "Mise à jour " + info.Version + " prête", Detail = "PerfMonitor va se relancer dans 20 s pour installer la nouvelle version (réglages et historique conservés)." };
+                bool later = false;
+                a.Actions.Add(new ToastAction { Label = "Maintenant", Primary = true, Run = () => { _installTimer?.Stop(); ApplyUpdate(); } });
+                a.Actions.Add(new ToastAction { Label = "Plus tard", Run = () => { later = true; _installTimer?.Stop(); _installing = false; _main.SetUpdateStatus("Mise à jour " + info.Version + " téléchargée : elle s'installera à la prochaine vérification (ou bouton « Installer maintenant »).", null); ScheduleInstallRetry(); } });
+                Toasts.Show(a, true);
+                _main.SetUpdateStatus("Mise à jour " + info.Version + " téléchargée : relance dans 20 s…", null);
+                _installTimer?.Stop();
+                _installTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+                _installTimer.Tick += (s, e) => { if (later) { _installTimer.Stop(); return; } if (--left <= 0) { _installTimer.Stop(); ApplyUpdate(); } else _main.SetUpdateStatus("Mise à jour " + info.Version + " téléchargée : relance dans " + left + " s…", null); };
+                _installTimer.Start();
+            }
+            catch (Exception ex)
+            {
+                Paths.Log("MAJ install: " + ex.Message);
+                _main.SetUpdateStatus("Installation impossible : " + ex.Message + " — tu peux télécharger à la main.", info.Url);
+                _installing = false;
+            }
+        }
+        DispatcherTimer _installRetry;
+        void ScheduleInstallRetry()
+        {   // nouvel essai dans 1 h (ou dès la prochaine vérification manuelle)
+            _installRetry?.Stop();
+            _installRetry = new DispatcherTimer { Interval = TimeSpan.FromHours(1) };
+            _installRetry.Tick += (s, e) => { _installRetry.Stop(); if (_pendingUpdate != null && !Games.Active) InstallUpdate(); else if (_pendingUpdate != null) ScheduleInstallRetry(); };
+            _installRetry.Start();
+        }
+        void ApplyUpdate()
+        {
+            try
+            {
+                Settings.Save();
+                Paths.Log("MAJ : remplacement de l'exe et relance (" + _pendingUpdate?.Version + ")");
+                Updater.LaunchReplace(_downloadedExe, TaskExists());
+                Quit();
+            }
+            catch (Exception ex) { Paths.Log("MAJ apply: " + ex.Message); _main.SetUpdateStatus("Relance impossible : " + ex.Message, _pendingUpdate?.Url); _installing = false; }
+        }
+
         // ---------------------------------------------------------------- mises à jour
         bool _updateChecking;
         void MaybeCheckUpdate()
@@ -148,12 +205,18 @@ namespace PerfMonitorLive
                 Settings.LastUpdateCheck = DateTime.Now; Settings.LastUpdateVersion = info.Version; Settings.Save();
                 if (info.IsNewer)
                 {
+                    _pendingUpdate = info;
                     _main.SetUpdateStatus("Nouvelle version disponible : " + info.Version + " (installée : " + Updater.CurrentVersion + ").", info.Url);
-                    var a = new AlertInfo { RuleId = "update", Time = DateTime.Now, Severity = Severity.Info, Title = "PerfMonitor " + info.Version + " est disponible", Detail = "Tu utilises la " + Updater.CurrentVersion + ". Télécharge le nouvel exe, remplace l'ancien, relance : tes réglages et ton historique sont conservés." };
-                    a.Actions.Add(new ToastAction { Label = "Télécharger", Primary = true, Run = () => Start(info.ExeUrl ?? info.Url, "") });
-                    Toasts.Show(a, true);
+                    _main.SetUpdateInstallable(true);
+                    if (Settings.UpdateAutoInstall) InstallUpdate();
+                    else
+                    {
+                        var a = new AlertInfo { RuleId = "update", Time = DateTime.Now, Severity = Severity.Info, Title = "PerfMonitor " + info.Version + " est disponible", Detail = "Tu utilises la " + Updater.CurrentVersion + ". Réglages et historique sont conservés lors de la mise à jour." };
+                        a.Actions.Add(new ToastAction { Label = "Installer", Primary = true, Run = InstallUpdate });
+                        Toasts.Show(a, true);
+                    }
                 }
-                else _main.SetUpdateStatus("À jour (" + Updater.CurrentVersion + "). Vérifié le " + DateTime.Now.ToString("dd/MM à HH:mm") + ".", null);
+                else { _pendingUpdate = null; _main.SetUpdateInstallable(false); _main.SetUpdateStatus("À jour (" + Updater.CurrentVersion + "). Vérifié le " + DateTime.Now.ToString("dd/MM à HH:mm") + ".", null); }
             }
             catch (Exception ex)
             {

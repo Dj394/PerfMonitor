@@ -54,6 +54,8 @@ namespace PerfMonitorLive.UI
             UpdateBtn.IsEnabled = text != "Vérification…";
         }
         void Update_Click(object s, RoutedEventArgs e) => _app.CheckUpdate(true);
+        void UpdateInstall_Click(object s, RoutedEventArgs e) => _app.InstallUpdate();
+        public void SetUpdateInstallable(bool on) => UpdateInstallBtn.Visibility = on ? Visibility.Visible : Visibility.Collapsed;
         void UpdateOpen_Click(object s, RoutedEventArgs e) { try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(_updateUrl ?? Updater.ReleasesUrl) { UseShellExecute = true }); } catch { } }
         DateTime _selfCostShown = DateTime.MinValue;
         /// <summary>Met à jour la ligne « coût de PerfMonitor » de l'onglet Machine (toutes les 30 s, si l'onglet est visible).</summary>

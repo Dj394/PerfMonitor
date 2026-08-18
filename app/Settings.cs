@@ -164,6 +164,7 @@ namespace PerfMonitorLive
         public bool EcoAuto { get; set; } = true;
         public bool WelcomeShown { get; set; }                   // guide de première ouverture déjà vu
         public bool UpdateAuto { get; set; } = true;             // vérifier les mises à jour (GitHub) une fois par jour
+        public bool UpdateAutoInstall { get; set; } = true;      // installer automatiquement (téléchargement + remplacement de l'exe + relance)
         public DateTime? LastUpdateCheck { get; set; }
         public string LastUpdateVersion { get; set; }            // dernière version vue en ligne                // mode économie : 1 mesure / 2 s sur batterie ou fenêtre fermée > 5 min                   // seuils par défaut adaptés au matériel (portable, HDD/SSD…) déjà appliqués
 

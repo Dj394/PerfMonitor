@@ -30,7 +30,7 @@ Application C# WPF (.NET 10), un seul exe. Lancée automatiquement à l'ouvertur
 
 ### Première ouverture, version, mises à jour
 - À la première ouverture de la fenêtre, un **guide en 5 points** (Live, alertes, conseiller, historique/processus, machine/paramètres) avec ce qui a été détecté ; « Revoir le guide » dans Paramètres.
-- Version affichée à côté du titre et dans l'onglet Machine. **Mises à jour** (Paramètres) : vérification de la dernière Release GitHub une fois par jour (désactivable) ou à la demande ; si plus récente, notification avec bouton « Télécharger » — rien n'est installé automatiquement : remplacer l'exe suffit, réglages et historique sont conservés.
+- Version affichée à côté du titre et dans l'onglet Machine. **Mises à jour** (Paramètres) : vérification de la dernière Release GitHub une fois par jour (désactivable) ou à la demande ; si plus récente, **installation automatique** (option désactivable) : téléchargement de l'exe correspondant (normal ou portable), notification « relance dans 20 s » avec *Maintenant* / *Plus tard*, remplacement de l'exe (l'ancien est gardé en `.old`) et relance — jamais pendant un jeu. Réglages et historique sont conservés.
 
 ### Empreinte
 Mesurée sur un Ryzen 5800X : **≈ 0,1 % CPU et ~60 Mo de RAM** réduit dans la zone de notification (≈ 1 % / 170 Mo fenêtre ouverte, à cause du rendu des graphiques). Processus lus par l'API .NET toutes les 5 s, capteurs carte mère toutes les 5 s, SMART toutes les 30 s. **Mode économie automatique** (Paramètres, désactivable) : 1 mesure toutes les 2 s sur batterie ou fenêtre fermée depuis > 5 min — l'historique 5 s, les alertes et les rapports ne changent pas. La ligne « Coût de PerfMonitor » de l'onglet Machine affiche la consommation en direct.
