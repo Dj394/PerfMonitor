@@ -20,7 +20,7 @@ namespace PerfMonitorLive.Metrics
         public double SelfMemMB { get; private set; }
         readonly int _cores = Environment.ProcessorCount;
         double _totalMB;
-        List<ProcSample> _lastProcs = new List<ProcSample>();
+        volatile List<ProcSample> _lastProcs = new List<ProcSample>();
         DateTime _lastProcTime = DateTime.MinValue;
         bool _tempTried, _tempAvailable;
         DateTime _batTime = DateTime.MinValue; double? _bat; bool? _ac; bool _batAbsent;
@@ -30,21 +30,108 @@ namespace PerfMonitorLive.Metrics
         static readonly Regex ProcSuffix = new Regex(@"#\d+$", RegexOptions.Compiled);
         static readonly Regex NetSkip = new Regex("isatap|Loopback|Teredo", RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
+        /// <summary>Dernières valeurs publiées par le thread WMI (disques, réseau, pression mémoire).</summary>
+        class WmiSnap { public List<DiskSample> Disks = new List<DiskSample>(); public double Rx, Tx, PageIn; }
+        volatile WmiSnap _wmi;
+        volatile Hardware.Reading _sensors;
+        volatile RebootInfo _rebootCache;
+        readonly Thread _wmiThread, _sensorThread;
+
         public Sampler()
         {
-            _thread = new Thread(Loop) { IsBackground = true, Name = "Sampler", Priority = ThreadPriority.BelowNormal };
+            // AboveNormal : en BelowNormal, une machine saturée affame le thread de mesure (mesures espacées de 20 s au lieu de 5),
+            // et les alertes à maintien (« au-dessus du seuil depuis 30 s ») ne partent jamais quand la charge est maximale.
+            _thread = new Thread(Loop) { IsBackground = true, Name = "Sampler", Priority = ThreadPriority.AboveNormal };
+            _wmiThread = new Thread(WmiLoop) { IsBackground = true, Name = "SamplerWmi" };
+            _sensorThread = new Thread(SensorLoop) { IsBackground = true, Name = "SamplerSensors" };
         }
-        public void Start() => _thread.Start();
+        public void Start() { _thread.Start(); _wmiThread.Start(); _sensorThread.Start(); }
 
-        void Loop()
+        /// <summary>Capteurs matériels sur leur propre thread : LibreHardwareMonitor et la lecture SMART ont été
+        /// mesurés jusqu'à 14,7 s sur une machine saturée. Températures et consommations n'ont pas besoin d'être
+        /// fraîches à la seconde ; la mesure lit la dernière publication.</summary>
+        void SensorLoop()
         {
-            try { foreach (var o in Query("SELECT TotalVisibleMemorySize FROM Win32_OperatingSystem")) _totalMB = Math.Round(D(o["TotalVisibleMemorySize"]) / 1024); }
-            catch (Exception ex) { Paths.Log("OS query: " + ex.Message); }
-            if (_totalMB <= 0) _totalMB = 1;
             Hw.TryInit();
             while (_run)
             {
                 var t0 = DateTime.Now;
+                try { _sensors = Hw.Read(); }
+                catch (Exception ex) { Paths.Log("Capteurs: " + ex.Message); }
+                var el = (DateTime.Now - t0).TotalMilliseconds;
+                int period = IntervalMs;
+                if (el < period) Thread.Sleep((int)(period - el));
+            }
+        }
+
+        /// <summary>Boucle WMI séparée : une requête lente (jusqu'à 19 s constatées sous charge) ne doit jamais
+        /// retarder la mesure ni les alertes ; la mesure lit simplement la dernière publication.</summary>
+        void WmiLoop()
+        {
+            while (_run)
+            {
+                var t0 = DateTime.Now;
+                try
+                {
+                    var snap = new WmiSnap();
+                    foreach (var o in Query("SELECT AvailableMBytes,PagesInputPersec FROM Win32_PerfFormattedData_PerfOS_Memory"))
+                        snap.PageIn = D(o["PagesInputPersec"]);
+                    foreach (var o in Query("SELECT Name,PercentDiskTime,DiskReadBytesPersec,DiskWriteBytesPersec,AvgDiskQueueLength,AvgDisksecPerTransfer FROM Win32_PerfFormattedData_PerfDisk_PhysicalDisk"))
+                    {
+                        var name = (string)o["Name"]; if (name == "_Total") continue;
+                        snap.Disks.Add(new DiskSample
+                        {
+                            n = name, pct = (int)Math.Min(100, D(o["PercentDiskTime"])),
+                            r = Math.Round(D(o["DiskReadBytesPersec"]) / 1048576.0, 2), w = Math.Round(D(o["DiskWriteBytesPersec"]) / 1048576.0, 2),
+                            q = Math.Round(D(o["AvgDiskQueueLength"]), 2), lat = Math.Round(D(o["AvgDisksecPerTransfer"]) * 1000, 1)
+                        });
+                    }
+                    double rx = 0, tx = 0;
+                    foreach (var o in Query("SELECT Name,BytesReceivedPersec,BytesSentPersec FROM Win32_PerfFormattedData_Tcpip_NetworkInterface"))
+                    {
+                        if (NetSkip.IsMatch((string)o["Name"] ?? "")) continue;
+                        rx += D(o["BytesReceivedPersec"]); tx += D(o["BytesSentPersec"]);
+                    }
+                    snap.Rx = Math.Round(rx / 1024, 1); snap.Tx = Math.Round(tx / 1024, 1);
+                    _wmi = snap;
+                }
+                catch (Exception ex) { Paths.Log("WMI: " + ex.Message); }
+                try
+                {
+                    if ((t0 - _lastProcTime).TotalSeconds >= 5)   // énumération des processus : jusqu'à 3 s sous charge
+                    {
+                        var list = CollectProcesses(t0);
+                        _lastProcs = list.OrderByDescending(p => p.cpu).ThenByDescending(p => p.mem).Take(6).ToList();
+                        _lastProcTime = t0;
+                        Leaks.Feed(t0, list);
+                    }
+                }
+                catch (Exception ex) { Paths.Log("Procs: " + ex.Message); }
+                try { _rebootCache = _reboot.Get(t0); }   // trois requêtes WMI toutes les 60 s : jusqu'à 13,6 s sous charge
+                catch (Exception ex) { Paths.Log("Reboot: " + ex.Message); }
+                try { RefreshBattery(t0); }
+                catch (Exception ex) { Paths.Log("Batterie: " + ex.Message); }
+                var el = (DateTime.Now - t0).TotalMilliseconds;
+                int period = IntervalMs;
+                if (el < period) Thread.Sleep((int)(period - el));
+            }
+        }
+
+        void Loop()
+        {
+            Native.Memory(out double totMB, out _);
+            _totalMB = Math.Round(totMB);
+            if (_totalMB <= 0) _totalMB = 1;
+            var prev = DateTime.Now; var lastLate = DateTime.MinValue;
+            while (_run)
+            {
+                var t0 = DateTime.Now;
+                var gap = (t0 - prev).TotalMilliseconds; prev = t0;
+                if (gap > 3 * IntervalMs && (t0 - lastLate).TotalSeconds > 15)   // trou de mesure : fausse les alertes à maintien
+                {
+                    lastLate = t0;
+                    Paths.Log("Mesure en retard : " + (gap / 1000).ToString("0.0") + " s au lieu de " + (IntervalMs / 1000.0).ToString("0.#") + " s · phases précédentes : " + _phases);
+                }
                 try { var s = Collect(t0); SampleReady?.Invoke(s); }
                 catch (Exception ex) { Paths.Log("Sample: " + ex.Message); }
                 var el = (DateTime.Now - t0).TotalMilliseconds;
@@ -53,48 +140,38 @@ namespace PerfMonitorLive.Metrics
             }
         }
 
+        /// <summary>Chronométrage des phases : renseigné à chaque mesure, journalisé quand une mesure prend trop de temps.</summary>
+        readonly System.Diagnostics.Stopwatch _phase = new System.Diagnostics.Stopwatch();
+        string _phases;
+        void Lap(System.Text.StringBuilder sb, string name) { sb.Append(name).Append('=').Append(_phase.ElapsedMilliseconds).Append("ms "); _phase.Restart(); }
+
         Sample Collect(DateTime now)
         {
+            var sb = new System.Text.StringBuilder(); _phase.Restart();
             var s = new Sample { Time = now, ts = now.ToString("yyyy-MM-ddTHH:mm:ss"), TotalMB = _totalMB };
-            foreach (var o in Query("SELECT PercentProcessorTime FROM Win32_PerfFormattedData_PerfOS_Processor WHERE Name='_Total'"))
-                s.cpu = D(o["PercentProcessorTime"]);
-            foreach (var o in Query("SELECT AvailableMBytes,PagesInputPersec FROM Win32_PerfFormattedData_PerfOS_Memory"))
-            {
-                s.memMB = _totalMB - D(o["AvailableMBytes"]);
-                s.memPct = Math.Round(s.memMB * 100 / _totalMB, 1);
-                s.pageIn = D(o["PagesInputPersec"]);
-            }
-            foreach (var o in Query("SELECT Name,PercentDiskTime,DiskReadBytesPersec,DiskWriteBytesPersec,AvgDiskQueueLength,AvgDisksecPerTransfer FROM Win32_PerfFormattedData_PerfDisk_PhysicalDisk"))
-            {
-                var name = (string)o["Name"]; if (name == "_Total") continue;
-                s.disks.Add(new DiskSample
-                {
-                    n = name, pct = (int)Math.Min(100, D(o["PercentDiskTime"])),
-                    r = Math.Round(D(o["DiskReadBytesPersec"]) / 1048576.0, 2), w = Math.Round(D(o["DiskWriteBytesPersec"]) / 1048576.0, 2),
-                    q = Math.Round(D(o["AvgDiskQueueLength"]), 2), lat = Math.Round(D(o["AvgDisksecPerTransfer"]) * 1000, 1)
-                });
-            }
-            double rx = 0, tx = 0;
-            foreach (var o in Query("SELECT Name,BytesReceivedPersec,BytesSentPersec FROM Win32_PerfFormattedData_Tcpip_NetworkInterface"))
-            {
-                if (NetSkip.IsMatch((string)o["Name"] ?? "")) continue;
-                rx += D(o["BytesReceivedPersec"]); tx += D(o["BytesSentPersec"]);
-            }
-            s.rx = Math.Round(rx / 1024, 1); s.tx = Math.Round(tx / 1024, 1);
+            // CPU et mémoire : API noyau en processus (quelques microsecondes). WMI mettait jusqu'à 19 s à répondre
+            // sur une machine saturée, ce qui trouait l'historique et retardait les alertes à maintien.
+            s.cpu = Native.CpuPercent();
+            Native.Memory(out double totalMB, out double availMB);
+            if (totalMB > 0) { _totalMB = totalMB; s.TotalMB = totalMB; }
+            s.memMB = Math.Max(0, _totalMB - availMB);
+            s.memPct = _totalMB > 0 ? Math.Round(s.memMB * 100 / _totalMB, 1) : 0;
+            // disques, réseau et pression mémoire : toujours WMI, mais mesurés par un thread dédié — on lit sa dernière publication
+            var w = _wmi;
+            if (w != null) { s.disks = w.Disks; s.rx = w.Rx; s.tx = w.Tx; s.pageIn = w.PageIn; }
+            Lap(sb, "wmi");
 
-            if ((now - _lastProcTime).TotalSeconds >= 5)
-            {
-                var list = CollectProcesses(now);
-                _lastProcs = list.OrderByDescending(p => p.cpu).ThenByDescending(p => p.mem).Take(6).ToList();
-                _lastProcTime = now;
-                Leaks.Feed(now, list);
-            }
             s.procs = _lastProcs;
             s.Leaks = Leaks.Current;
-            ReadBattery(now, s);
-            try { s.rb = _reboot.Get(now); } catch (Exception ex) { Paths.Log("Reboot: " + ex.Message); }
+            Lap(sb, "procs");
+            s.bat = _bat; s.ac = _ac;
+            Lap(sb, "bat");
+            s.rb = _rebootCache;
+            Lap(sb, "reboot");
 
-            var r = Hw.Read();
+            var r = _sensors ?? new Hardware.Reading();
+            Lap(sb, "capteurs");
+            _phases = sb.ToString();
             s.temp = r.Cpu; s.gpu = r.Gpu; s.cpuMHz = r.CpuMHz; s.gpuMHz = r.GpuMHz; s.cpuW = r.CpuW; s.gpuW = r.GpuW;
             s.fans = r.Fans; s.stor = r.Storage;
             if (!Hw.Available && (!_tempTried || _tempAvailable))
@@ -146,7 +223,8 @@ namespace PerfMonitorLive.Metrics
         }
 
         /// <summary>Batterie (portables) : Win32_Battery toutes les 20 s ; ignoré si absente.</summary>
-        void ReadBattery(DateTime now, Sample s)
+        /// <summary>Batterie : requête WMI toutes les 20 s (jusqu'à 5 s de réponse sous charge), appelée par le thread lent.</summary>
+        void RefreshBattery(DateTime now)
         {
             if (_batAbsent) return;
             if ((now - _batTime).TotalSeconds >= 20)
@@ -160,7 +238,6 @@ namespace PerfMonitorLive.Metrics
                 catch { }
                 if (!found) { _batAbsent = true; _bat = null; _ac = null; }
             }
-            s.bat = _bat; s.ac = _ac;
         }
 
         static double D(object v) { if (v == null) return 0; try { return Convert.ToDouble(v); } catch { return 0; } }
