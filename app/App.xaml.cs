@@ -99,14 +99,26 @@ namespace PerfMonitorLive
         {
             _last = s;
             s.GameActive = Games.Active;
+            EnsureDynamicRules(s);
             Alerts.OnSample(s);
             _history.OnSample(s);
             _main.OnSample(s);
-            if (_tick < 600 && Inventory.UpdateCapabilities(s, Hardware.IsElevated)) _main.RefreshMachine();
+            if (_tick < 600 && Inventory.UpdateCapabilities(s, Hardware.IsElevated, _sampler.Hw)) _main.RefreshMachine();
             _overlay?.Update(s);
             if (_widget != null && _widget.IsVisible) _widget.Update(s);
             if (++_tick % 2 == 0) _tray.Update(s.cpu, s.memPct, Alerts.ActiveRules.Count > 0);
         }
+        /// <summary>Règles d'alerte des disques, de la santé SMART et des ventilateurs : créées dès la première mesure.
+        /// Sans ça, une session démarrée réduite dans la zone de notification n'arme aucune alerte disque tant que la fenêtre n'a pas été ouverte.</summary>
+        void EnsureDynamicRules(Sample s)
+        {
+            var m = Inventory.Current; bool ch = false;
+            foreach (var d in s.disks) ch |= Settings.EnsureDisk(d.n, m.DiskByPerfName(d.n)?.Kind ?? Metrics.DiskKind.Unknown);
+            foreach (var st in s.stor) ch |= Settings.EnsureStorage(st.n, m.DiskByStorName(st.n)?.Kind ?? Metrics.DiskKind.Unknown);
+            foreach (var f in s.fans) if (f.rpm > 0) ch |= Settings.EnsureFan(f.n);
+            if (ch) Settings.Save();
+        }
+
         /// <summary>Après un scan matériel : seuils par défaut adaptés (première installation) et cartes reconstruites.</summary>
         public void OnInventory(MachineInfo m)
         {
@@ -379,6 +391,12 @@ namespace PerfMonitorLive
         }
         public void OpenReport()
         {
+            if (!System.IO.File.Exists(Paths.ReportScript))   // exe installé seul : le bouton ne faisait rien, sans rien dire
+            {
+                Paths.Log("Report : " + Paths.ReportScript + " introuvable");
+                Toasts.Show(new AlertInfo { RuleId = "report", Time = DateTime.Now, Severity = Severity.Warning, Title = "Rapport HTML indisponible", Detail = "Placer report.ps1 et template.html à côté de PerfMonitorLive.exe (dossier " + Paths.BaseDir + ")." }, true);
+                return;
+            }
             try { Process.Start(new ProcessStartInfo("powershell.exe", "-NoProfile -ExecutionPolicy Bypass -File \"" + Paths.ReportScript + "\" -Hours 24") { WindowStyle = ProcessWindowStyle.Hidden, UseShellExecute = false, CreateNoWindow = true }); }
             catch (Exception ex) { Paths.Log("Report: " + ex.Message); }
         }

@@ -60,6 +60,7 @@ namespace PerfMonitorLive.UI
         void MachineOnSample()
         {
             var smp = _app.Sampler; if (smp.SelfMemMB <= 0) return;
+            Hw = _app.Sampler.Hw;
             SelfCost = smp.SelfCpuPct.ToString("0.0") + " % CPU · " + smp.SelfMemMB.ToString("0") + " Mo · " + (_app.EcoActive ? "mode économie (2 s)" : "mesure toutes les " + (smp.IntervalMs / 1000.0).ToString("0.#") + " s");
             if (IsVisible && (DateTime.Now - _selfCostShown).TotalSeconds >= 30 && MachinePanel.IsVisible) { _selfCostShown = DateTime.Now; RenderMachine(Inventory.Current); }
         }
@@ -126,18 +127,28 @@ namespace PerfMonitorLive.UI
 
             var cap = Sec("📡  Capteurs disponibles");
             Add(cap, "Droits admin", m.Elevated ? "oui (capteurs matériels actifs)" : "non — températures/ventilateurs indisponibles (lancer via la tâche planifiée)");
+            Add(cap, "Pilote capteurs (PawnIO)", Metrics.Hardware.PawnIOInstalled ? "✅ installé" : "❌ absent — sans lui, pas de température ni de fréquence CPU, ni de ventilateurs (à installer depuis pawnio.eu, puis relancer)");
             Add(cap, "Température CPU", m.CapCpuTemp ? "✅" : "❌");
             Add(cap, "Température GPU", m.CapGpuTemp ? "✅" : m.Gpus.Count == 0 ? "— (pas de GPU)" : "❌");
             Add(cap, "Ventilateurs", m.CapFans ? "✅" : "❌ (aucun capteur lu — courant sur portable / carte mère non prise en charge)");
             Add(cap, "SMART / temp. disques", m.CapStorTemp ? "✅" : "❌");
-            Add(cap, "Consommation (W)", m.CapPower ? "✅" : "❌");
-            Add(cap, "Fréquences", m.CapClocks ? "✅" : "❌");
+            Add(cap, "Consommation (W)", CapText(m.CapPower, Hw?.SawCpuPower, Hw?.SawGpuPower));
+            Add(cap, "Fréquences", CapText(m.CapClocks, Hw?.SawCpuClock, Hw?.SawGpuClock));
             Add(cap, "Coût de PerfMonitor", SelfCost);
             Add(cap, "Version", Updater.CurrentVersion);
             Add(cap, "Dernier scan", m.ScannedAt == default(DateTime) ? null : m.ScannedAt.ToString("dd/MM/yyyy HH:mm") + " (" + m.ScanMs + " ms)");
             return secs;
         }
         static string SelfCost;
+        static Metrics.Hardware Hw;
+        /// <summary>Conso et fréquences peuvent n'être lues que d'un côté (portable Intel sans pilote noyau : seul le GPU répond).</summary>
+        static string CapText(bool cap, bool? cpu, bool? gpu)
+        {
+            if (!cap) return "❌";
+            if (cpu == true && gpu != true) return "✅ (CPU seulement)";
+            if (gpu == true && cpu != true) return "✅ (GPU seulement)";
+            return "✅";
+        }
         public static string VendorName(Vendor v) => v == Vendor.Amd ? "AMD" : v == Vendor.Intel ? "Intel" : v == Vendor.Nvidia ? "NVIDIA" : v == Vendor.Qualcomm ? "Qualcomm" : "—";
 
         void RenderMachine(MachineInfo m)

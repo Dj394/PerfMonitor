@@ -13,6 +13,30 @@ namespace PerfMonitorLive.Metrics
         Computer _pc;
         public bool Available { get; private set; }
         public string Status { get; private set; } = "non initialisé";
+        /// <summary>Depuis la version 0.9.5, LibreHardwareMonitor n'embarque plus de pilote noyau : l'accès MSR (températures et
+        /// fréquences CPU, consommation) et SuperIO (ventilateurs) passe par PawnIO, à installer séparément (https://pawnio.eu).
+        /// Sans lui, seuls les capteurs lisibles en espace utilisateur répondent (GPU via NVAPI/ADL, SMART via Windows).</summary>
+        public static bool PawnIOInstalled
+        {
+            get
+            {
+                if (_pawn.HasValue) return _pawn.Value;
+                bool ok = false;
+                try
+                {
+                    ok = System.IO.File.Exists(System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "PawnIO", "PawnIOLib.dll"))
+                      || System.IO.File.Exists(System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "drivers", "PawnIO.sys"));
+                    if (!ok) using (var k = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(@"SYSTEM\CurrentControlSet\Services\PawnIO")) ok = k != null;
+                }
+                catch { }
+                _pawn = ok; return ok;
+            }
+        }
+        static bool? _pawn;
+
+        /// <summary>Raison affichée sur une carte dont la mesure manque.</summary>
+        public string MissingReason => !Available ? Status : PawnIOInstalled ? "capteur introuvable" : "pilote PawnIO absent (pawnio.eu)";
+
         public static bool IsElevated
         {
             get { try { using (var id = WindowsIdentity.GetCurrent()) return new WindowsPrincipal(id).IsInRole(WindowsBuiltInRole.Administrator); } catch { return false; } }
@@ -26,15 +50,41 @@ namespace PerfMonitorLive.Metrics
                 _pc = new Computer { IsCpuEnabled = true, IsGpuEnabled = true, IsMotherboardEnabled = true, IsStorageEnabled = false, IsMemoryEnabled = false, IsNetworkEnabled = false, IsControllerEnabled = false };
                 _pc.Open();
                 Available = true; Status = "ok";
+                if (!PawnIOInstalled) Paths.Log("PawnIO absent : températures/fréquences/consommation CPU et ventilateurs indisponibles (LibreHardwareMonitor 0.9.6 n'embarque plus de pilote noyau — https://pawnio.eu)");
                 foreach (var h in _pc.Hardware)
                 {
                     h.Update();
+                    Note(h);
                     Paths.Log("Capteur " + h.HardwareType + " [" + Clean(h.Name) + "] : " + string.Join(" | ", h.Sensors.Where(x => x.SensorType == SensorType.Temperature || x.SensorType == SensorType.Fan || x.SensorType == SensorType.Clock || x.SensorType == SensorType.Power).Select(x => x.SensorType + ":" + x.Name + "=" + x.Value)));
-                    foreach (var sub in h.SubHardware) { sub.Update(); Paths.Log("  sous-capteur " + sub.HardwareType + " [" + Clean(sub.Name) + "] : " + string.Join(" | ", sub.Sensors.Where(x => x.SensorType == SensorType.Fan || x.SensorType == SensorType.Temperature).Select(x => x.SensorType + ":" + x.Name + "=" + x.Value))); }
+                    foreach (var sub in h.SubHardware) { sub.Update(); Note(sub); Paths.Log("  sous-capteur " + sub.HardwareType + " [" + Clean(sub.Name) + "] : " + string.Join(" | ", sub.Sensors.Where(x => x.SensorType == SensorType.Fan || x.SensorType == SensorType.Temperature).Select(x => x.SensorType + ":" + x.Name + "=" + x.Value))); }
                 }
                 return true;
             }
             catch (Exception ex) { Status = "erreur capteurs : " + ex.Message; Paths.Log("LHM: " + ex); Available = false; return false; }
+        }
+
+        /// <summary>Capteurs vus au moins une fois (à l'initialisation ou pendant une mesure). Un GPU hybride (Optimus)
+        /// répond quand il est actif puis s'endort : la carte doit rester affichée, avec « en veille » à la place de la valeur.</summary>
+        public bool SawCpuTemp, SawCpuClock, SawCpuPower, SawGpuTemp, SawGpuClock, SawGpuPower, SawFans;
+
+        void Note(IHardware h)
+        {
+            bool isGpu = h.HardwareType == HardwareType.GpuAmd || h.HardwareType == HardwareType.GpuNvidia || h.HardwareType == HardwareType.GpuIntel;
+            if (isGpu && GpuRank(h) < GpuWanted()) return;   // GPU secondaire (intégré d'un portable hybride) : pas suivi
+            bool isCpu = h.HardwareType == HardwareType.Cpu;
+            foreach (var s in h.Sensors)
+            {
+                if (!s.Value.HasValue || s.Value.Value <= 0) continue;
+                switch (s.SensorType)
+                {
+                    case SensorType.Temperature:
+                        if (s.Value.Value < 150) { if (isGpu) SawGpuTemp = true; else if (isCpu) SawCpuTemp = true; }
+                        break;
+                    case SensorType.Fan: SawFans = true; break;
+                    case SensorType.Clock: if (isGpu) SawGpuClock = true; else if (isCpu) SawCpuClock = true; break;
+                    case SensorType.Power: if (isGpu) SawGpuPower = true; else if (isCpu) SawCpuPower = true; break;
+                }
+            }
         }
 
         public class Reading
@@ -72,10 +122,12 @@ namespace PerfMonitorLive.Metrics
                         {
                             case HardwareType.Cpu:
                                 r.Cpu = Pick(h, SensorType.Temperature, "Core (Tctl/Tdie)", "Tctl/Tdie", "CCD1 (Tdie)", "Core (Tctl)", "CPU Package", "Package", "Core Average", "Core Max") ?? Max(h, SensorType.Temperature);
-                                r.CpuMHz = Max(h, SensorType.Clock, x => x.Name.StartsWith("Core"));
+                                // AMD nomme ses capteurs « Core #1 », Intel « CPU Core #1 » — et il ne faut pas prendre « Bus Speed »
+                                r.CpuMHz = Max(h, SensorType.Clock, x => x.Name.IndexOf("Core", StringComparison.OrdinalIgnoreCase) >= 0);
                                 r.CpuW = Pick(h, SensorType.Power, "Package", "CPU Package", "CPU Cores") ?? Max(h, SensorType.Power);
                                 break;
                             case HardwareType.GpuAmd: case HardwareType.GpuNvidia: case HardwareType.GpuIntel:
+                                if (GpuRank(h) < GpuWanted()) break;   // portable hybride : ignorer l'intégré, qui écraserait la carte dédiée
                                 r.Gpu = Pick(h, SensorType.Temperature, "GPU Core", "GPU Hot Spot") ?? Max(h, SensorType.Temperature);
                                 r.GpuMHz = Pick(h, SensorType.Clock, "GPU Core") ?? Max(h, SensorType.Clock);
                                 r.GpuW = Pick(h, SensorType.Power, "GPU Package", "GPU Core", "GPU Total") ?? Max(h, SensorType.Power);
@@ -86,8 +138,37 @@ namespace PerfMonitorLive.Metrics
                 }
                 catch (Exception ex) { Paths.Log("LHM read: " + ex.Message); }
             }
+            if (r.Cpu.HasValue) SawCpuTemp = true;
+            if (r.Gpu.HasValue) SawGpuTemp = true;
+            if (r.CpuMHz.HasValue) SawCpuClock = true;
+            if (r.GpuMHz.HasValue) SawGpuClock = true;
+            if (r.CpuW.HasValue) SawCpuPower = true;
+            if (r.GpuW.HasValue) SawGpuPower = true;
+            if (r.Fans.Any(f => f.rpm > 0)) SawFans = true;
             ReadStorageWmi(r);
             return r;
+        }
+
+        int _gpuWant = -1;
+        /// <summary>Rang d'un GPU : 2 = carte dédiée reconnue dans l'inventaire, 1 = dédiée supposée, 0 = intégrée.
+        /// Sur un portable hybride, le GPU intégré répond en permanence : sans priorité il écrase les mesures de la carte dédiée.</summary>
+        static int GpuRank(IHardware h)
+        {
+            var name = Clean(h.Name); var inv = Inventory.Current;
+            if (inv != null && inv.Gpus != null)
+                foreach (var g in inv.Gpus)
+                    if (!string.IsNullOrEmpty(g.Name) && (g.Name.IndexOf(name, StringComparison.OrdinalIgnoreCase) >= 0 || name.IndexOf(g.Name, StringComparison.OrdinalIgnoreCase) >= 0))
+                        return g.Integrated ? 0 : 2;
+            return h.HardwareType == HardwareType.GpuIntel ? 0 : 1;
+        }
+        /// <summary>Rang du GPU à suivre : le meilleur présent sur la machine (une machine sans carte dédiée suit son GPU intégré).</summary>
+        int GpuWanted()
+        {
+            if (_gpuWant < 0)
+                foreach (var h in _pc.Hardware)
+                    if (h.HardwareType == HardwareType.GpuAmd || h.HardwareType == HardwareType.GpuNvidia || h.HardwareType == HardwareType.GpuIntel)
+                        _gpuWant = Math.Max(_gpuWant, GpuRank(h));
+            return _gpuWant < 0 ? 0 : _gpuWant;
         }
 
         DateTime _mbTime = DateTime.MinValue; List<FanSample> _mbFans = new List<FanSample>();
@@ -104,7 +185,8 @@ namespace PerfMonitorLive.Metrics
         static string Clean(string n) => (n ?? "").Replace("\0", "").Trim();
         static double? Pick(IHardware h, SensorType type, params string[] names)
         {
-            var list = h.Sensors.Where(s => s.SensorType == type && s.Value.HasValue).ToList();
+            // 0 = capteur présent mais non renseigné (portable Intel sans pilote noyau : Power:CPU Package=0) → pas une mesure
+            var list = h.Sensors.Where(s => s.SensorType == type && s.Value.HasValue && s.Value.Value > 0).ToList();
             foreach (var n in names) { var s = list.FirstOrDefault(x => x.Name == n); if (s != null) return Math.Round(s.Value.Value, 1); }
             return null;
         }
