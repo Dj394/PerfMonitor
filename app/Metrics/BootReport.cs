@@ -78,6 +78,7 @@ namespace PerfMonitorLive.Metrics
                     added++;
                 }
             }
+            catch (UnauthorizedAccessException) { Paths.Log("BootReport : journal Diagnostics-Performance inaccessible (droits administrateur requis) — démarrages Windows non relevés"); }
             catch (Exception ex) { Paths.Log("BootReport: " + ex.Message); }
             return added;
         }
