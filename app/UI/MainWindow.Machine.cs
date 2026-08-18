@@ -21,6 +21,37 @@ namespace PerfMonitorLive.UI
         }
 
         public void RefreshMachine() => RenderMachine(Inventory.Current);
+
+        // ------------------------------------------------------------ guide de bienvenue
+        WelcomeWindow _welcome;
+        public void ShowWelcome()
+        {
+            if (_welcome != null) return;
+            try
+            {
+                var scr = _app.Toasts.TargetScreen();
+                string scrName = scr == null ? null : (scr.Primary ? "l'écran principal" : "l'écran secondaire") + " (" + scr.Bounds.Width + "×" + scr.Bounds.Height + ")";
+                _welcome = new WelcomeWindow(Inventory.Current, scrName) { Owner = this };
+                _welcome.ShowAgain.IsChecked = false;
+                _welcome.ShowDialog();
+                _app.Settings.WelcomeShown = !_welcome.ShowNextTime; _app.Settings.Save();
+                if (_welcome.GoToMachine) ShowTab("Machine");
+            }
+            catch (Exception ex) { Paths.Log("welcome: " + ex.Message); }
+            finally { _welcome = null; }
+        }
+        void Welcome_Click(object s, RoutedEventArgs e) => ShowWelcome();
+
+        // ------------------------------------------------------------ mises à jour
+        string _updateUrl;
+        public void SetUpdateStatus(string text, string url)
+        {
+            UpdateText.Text = text ?? ""; _updateUrl = url;
+            UpdateOpenBtn.Visibility = string.IsNullOrEmpty(url) ? Visibility.Collapsed : Visibility.Visible;
+            UpdateBtn.IsEnabled = text != "Vérification…";
+        }
+        void Update_Click(object s, RoutedEventArgs e) => _app.CheckUpdate(true);
+        void UpdateOpen_Click(object s, RoutedEventArgs e) { try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(_updateUrl ?? Updater.ReleasesUrl) { UseShellExecute = true }); } catch { } }
         DateTime _selfCostShown = DateTime.MinValue;
         /// <summary>Met à jour la ligne « coût de PerfMonitor » de l'onglet Machine (toutes les 30 s, si l'onglet est visible).</summary>
         void MachineOnSample()
@@ -99,6 +130,7 @@ namespace PerfMonitorLive.UI
             Add(cap, "Consommation (W)", m.CapPower ? "✅" : "❌");
             Add(cap, "Fréquences", m.CapClocks ? "✅" : "❌");
             Add(cap, "Coût de PerfMonitor", SelfCost);
+            Add(cap, "Version", Updater.CurrentVersion);
             Add(cap, "Dernier scan", m.ScannedAt == default(DateTime) ? null : m.ScannedAt.ToString("dd/MM/yyyy HH:mm") + " (" + m.ScanMs + " ms)");
             return secs;
         }

@@ -28,6 +28,10 @@ Application C# WPF (.NET 10), un seul exe. Lancée automatiquement à l'ouvertur
 - **Conseiller** : les conseils et astuces sont rédigés d'après l'inventaire (Ryzen → PBO/Curve Optimizer, Intel → limites PL1/PL2/undervolt, portable → surélévation/dépoussiérage/mode d'alimentation, GPU AMD → Adrenalin, NVIDIA → Afterburner/panneau NVIDIA, Intel Arc, GPU intégré, HDD → défragmentation/passer au SSD, RAM réelle, simple canal, batterie, outil SSD du fabricant détecté…) ; les astuces qui ne concernent pas la machine ne sont jamais proposées.
 - Installer sur une autre machine : copier le dossier (exe + `install-live.ps1` + `report.ps1`/`template.html`), lancer `.\install-live.ps1` (une invite UAC). Prérequis : Windows 10/11 x64 + **.NET 10 Desktop Runtime** — ou compiler un exe autonome avec `.uild.ps1 -Portable` (runtime inclus, ~150 Mo).
 
+### Première ouverture, version, mises à jour
+- À la première ouverture de la fenêtre, un **guide en 5 points** (Live, alertes, conseiller, historique/processus, machine/paramètres) avec ce qui a été détecté ; « Revoir le guide » dans Paramètres.
+- Version affichée à côté du titre et dans l'onglet Machine. **Mises à jour** (Paramètres) : vérification de la dernière Release GitHub une fois par jour (désactivable) ou à la demande ; si plus récente, notification avec bouton « Télécharger » — rien n'est installé automatiquement : remplacer l'exe suffit, réglages et historique sont conservés.
+
 ### Empreinte
 Mesurée sur un Ryzen 5800X : **≈ 0,1 % CPU et ~60 Mo de RAM** réduit dans la zone de notification (≈ 1 % / 170 Mo fenêtre ouverte, à cause du rendu des graphiques). Processus lus par l'API .NET toutes les 5 s, capteurs carte mère toutes les 5 s, SMART toutes les 30 s. **Mode économie automatique** (Paramètres, désactivable) : 1 mesure toutes les 2 s sur batterie ou fenêtre fermée depuis > 5 min — l'historique 5 s, les alertes et les rapports ne changent pas. La ligne « Coût de PerfMonitor » de l'onglet Machine affiche la consommation en direct.
 
@@ -49,8 +53,8 @@ Mesurée sur un Ryzen 5800X : **≈ 0,1 % CPU et ~60 Mo de RAM** réduit dans la
 ## Graphiques HTML (ancien rapport, toujours disponible)
 - `Rapport 24h.cmd` / `Rapport 7 jours.cmd`, ou `.\report.ps1 -Hours 6`. Marqueur : `.\note.ps1 "texte"`.
 
-## Ancien collecteur PowerShell (remplacé, conservé en secours)
-`collect.ps1` + `install-task.ps1`. Ne pas lancer en même temps que l'appli (doublons dans l'historique).
+## Ancien collecteur PowerShell (remplacé, conservé dans `legacy\`)
+`legacy\collect.ps1` + `legacy\install-task.ps1`. Ne pas lancer en même temps que l'appli (doublons dans l'historique).
 
 ## Licence
 MIT — voir `LICENSE`. Utilise [LibreHardwareMonitorLib](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor) (MPL 2.0).

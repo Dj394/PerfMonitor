@@ -161,7 +161,11 @@ namespace PerfMonitorLive
         public bool DigestEnabled { get; set; } = true;
         public string LastDigestDate { get; set; }               // yyyy-MM-dd
         public bool MachineTuned { get; set; }
-        public bool EcoAuto { get; set; } = true;                // mode économie : 1 mesure / 2 s sur batterie ou fenêtre fermée > 5 min                   // seuils par défaut adaptés au matériel (portable, HDD/SSD…) déjà appliqués
+        public bool EcoAuto { get; set; } = true;
+        public bool WelcomeShown { get; set; }                   // guide de première ouverture déjà vu
+        public bool UpdateAuto { get; set; } = true;             // vérifier les mises à jour (GitHub) une fois par jour
+        public DateTime? LastUpdateCheck { get; set; }
+        public string LastUpdateVersion { get; set; }            // dernière version vue en ligne                // mode économie : 1 mesure / 2 s sur batterie ou fenêtre fermée > 5 min                   // seuils par défaut adaptés au matériel (portable, HDD/SSD…) déjà appliqués
 
         static readonly JsonSerializerOptions Opts = new JsonSerializerOptions { WriteIndented = true, NumberHandling = JsonNumberHandling.AllowNamedFloatingPointLiterals };
         static readonly object Lock = new object();

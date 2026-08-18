@@ -128,6 +128,41 @@ namespace PerfMonitorLive
             }
         }
         public bool EcoActive => _eco;
+
+        // ---------------------------------------------------------------- mises à jour
+        bool _updateChecking;
+        void MaybeCheckUpdate()
+        {
+            if (!Settings.UpdateAuto || _updateChecking) return;
+            if (Settings.LastUpdateCheck.HasValue && (DateTime.Now - Settings.LastUpdateCheck.Value).TotalHours < 24) return;
+            CheckUpdate(false);
+        }
+        /// <summary>Vérifie la dernière Release GitHub ; notifie si plus récente. manual = déclenché par l'utilisateur (résultat affiché même si à jour).</summary>
+        public async void CheckUpdate(bool manual)
+        {
+            if (_updateChecking) return; _updateChecking = true;
+            _main.SetUpdateStatus("Vérification…", null);
+            try
+            {
+                var info = await Updater.CheckAsync();
+                Settings.LastUpdateCheck = DateTime.Now; Settings.LastUpdateVersion = info.Version; Settings.Save();
+                if (info.IsNewer)
+                {
+                    _main.SetUpdateStatus("Nouvelle version disponible : " + info.Version + " (installée : " + Updater.CurrentVersion + ").", info.Url);
+                    var a = new AlertInfo { RuleId = "update", Time = DateTime.Now, Severity = Severity.Info, Title = "PerfMonitor " + info.Version + " est disponible", Detail = "Tu utilises la " + Updater.CurrentVersion + ". Télécharge le nouvel exe, remplace l'ancien, relance : tes réglages et ton historique sont conservés." };
+                    a.Actions.Add(new ToastAction { Label = "Télécharger", Primary = true, Run = () => Start(info.ExeUrl ?? info.Url, "") });
+                    Toasts.Show(a, true);
+                }
+                else _main.SetUpdateStatus("À jour (" + Updater.CurrentVersion + "). Vérifié le " + DateTime.Now.ToString("dd/MM à HH:mm") + ".", null);
+            }
+            catch (Exception ex)
+            {
+                Paths.Log("MAJ: " + ex.Message);
+                _main.SetUpdateStatus(manual ? "Vérification impossible (" + (ex.Message.Length > 80 ? ex.Message.Substring(0, 80) : ex.Message) + "). Le dépôt existe-t-il déjà et as-tu accès à Internet ?" : "", manual ? Updater.ReleasesUrl : null);
+                if (!manual) { Settings.LastUpdateCheck = DateTime.Now; Settings.Save(); }   // pas de retentative en boucle
+            }
+            finally { _updateChecking = false; }
+        }
         void SlowTick()
         {
             try
@@ -135,7 +170,7 @@ namespace PerfMonitorLive
                 UpdateEco();
                 Games.Tick(_last);
                 if (Settings.ProfileAuto) ApplyAutoProfile();
-                if ((DateTime.Now - _lastHourly).TotalMinutes >= 10) { _lastHourly = DateTime.Now; MaybeDigest(); }
+                if ((DateTime.Now - _lastHourly).TotalMinutes >= 10) { _lastHourly = DateTime.Now; MaybeDigest(); MaybeCheckUpdate(); }
             }
             catch (Exception ex) { Paths.Log("slow: " + ex.Message); }
         }
@@ -347,7 +382,13 @@ namespace PerfMonitorLive
             try { Process.Start(new ProcessStartInfo("powershell.exe", "-NoProfile -ExecutionPolicy Bypass -File \"" + Paths.ReportScript + "\" -Hours 24") { WindowStyle = ProcessWindowStyle.Hidden, UseShellExecute = false, CreateNoWindow = true }); }
             catch (Exception ex) { Paths.Log("Report: " + ex.Message); }
         }
-        void ShowMain() { if (_eco) { _eco = false; _sampler.IntervalMs = 1000; } _main.Show(); if (_main.WindowState == WindowState.Minimized) _main.WindowState = WindowState.Normal; _main.Activate(); }
+        void ShowMain()
+        {
+            if (_eco) { _eco = false; _sampler.IntervalMs = 1000; }
+            ShowMainCore();
+            if (!Settings.WelcomeShown) Dispatcher.BeginInvoke(new Action(() => _main.ShowWelcome()), DispatcherPriority.ApplicationIdle);
+        }
+        void ShowMainCore() { _main.Show(); if (_main.WindowState == WindowState.Minimized) _main.WindowState = WindowState.Normal; _main.Activate(); }
         void ToggleMain() { if (_main.IsVisible && _main.WindowState != WindowState.Minimized) _main.Hide(); else ShowMain(); }
         void Quit()
         {

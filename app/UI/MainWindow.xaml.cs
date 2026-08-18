@@ -75,6 +75,7 @@ namespace PerfMonitorLive.UI
             InitHistory();
             InitExtras();
             InitMachine();
+            VersionText.Text = "v" + Updater.CurrentVersion;
         }
 
         public void ForceClose() { _reallyClose = true; Close(); }

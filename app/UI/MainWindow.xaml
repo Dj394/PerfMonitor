@@ -157,7 +157,10 @@
                         <Image Source="pack://application:,,,/app-icon.png" Stretch="Uniform"/>
                     </Border>
                     <StackPanel VerticalAlignment="Center">
-                        <TextBlock Text="PerfMonitor Live" FontSize="18" FontWeight="SemiBold" Foreground="{DynamicResource TitleFgBrush}"/>
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="PerfMonitor Live" FontSize="18" FontWeight="SemiBold" Foreground="{DynamicResource TitleFgBrush}"/>
+                            <TextBlock x:Name="VersionText" Text="v3.0" FontSize="11" Foreground="{DynamicResource MutedBrush}" VerticalAlignment="Bottom" Margin="8,0,0,3"/>
+                        </StackPanel>
                         <TextBlock x:Name="StatusText" Foreground="{DynamicResource MutedBrush}" FontSize="12"/>
                     </StackPanel>
                     <Border x:Name="StatusPill" CornerRadius="14" Padding="12,5" Margin="18,0,0,0" VerticalAlignment="Center" Background="#2A3D33">
@@ -473,6 +476,20 @@
                             <CheckBox IsChecked="{Binding EcoAuto}" Content="Mode économie automatique : 1 mesure toutes les 2 s (au lieu de 1 s) sur batterie ou fenêtre fermée depuis plus de 5 min" Margin="0,12,0,0"/>
                             <TextBlock Style="{StaticResource Hint}" Text="L'historique (5 s), les alertes et les rapports ne changent pas ; seule la fluidité du Live est réduite quand personne ne le regarde. Retour à 1 s dès que la fenêtre s'ouvre."/>
                             <TextBlock Style="{StaticResource Hint}" Margin="0,12,0,0" Text="L'historique est enregistré toutes les 5 s dans le dossier data\. Fermer la fenêtre ne quitte pas l'application (elle reste dans la zone de notification)."/>
+                            <Button Content="Revoir le guide de démarrage" HorizontalAlignment="Left" Margin="0,10,0,0" Click="Welcome_Click"/>
+                        </StackPanel>
+                    </Border>
+
+                    <Border Style="{StaticResource Section}">
+                        <StackPanel>
+                            <TextBlock Text="⬆️  Mises à jour" Style="{StaticResource SectionTitle}"/>
+                            <TextBlock Text="{Binding VersionText}"/>
+                            <CheckBox IsChecked="{Binding UpdateAuto}" Content="Vérifier automatiquement une fois par jour (dernière Release GitHub — rien n'est installé sans toi)" Margin="0,8,0,0"/>
+                            <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                                <Button x:Name="UpdateBtn" Content="Vérifier maintenant" Click="Update_Click"/>
+                                <Button x:Name="UpdateOpenBtn" Content="Ouvrir la page de téléchargement" Margin="8,0,0,0" Click="UpdateOpen_Click" Visibility="Collapsed" Style="{StaticResource PrimaryButton}"/>
+                            </StackPanel>
+                            <TextBlock x:Name="UpdateText" Style="{StaticResource Hint}"/>
                         </StackPanel>
                     </Border>
                 </StackPanel>
