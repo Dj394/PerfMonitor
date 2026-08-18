@@ -8,7 +8,21 @@ using PerfMonitorLive.Alerts;
 
 namespace PerfMonitorLive.Metrics
 {
-    /// <summary>Collecte les compteurs via WMI (indépendant de la langue) + capteurs matériels + score de redémarrage + fuites.</summary>
+    /// <summary>Collecte les compteurs système, les capteurs matériels, le score de redémarrage et les fuites.
+    ///
+    /// Trois threads, et c'est un choix de conception à respecter :
+    /// <list type="bullet">
+    /// <item>« Sampler » — la mesure. Ne fait que du travail immédiat : compteurs noyau (<see cref="Native"/>) et
+    /// assemblage des valeurs publiées par les deux autres. C'est lui qui tient la cadence dont dépendent les
+    /// alertes à maintien et la régularité de l'historique.</item>
+    /// <item>« SamplerWmi » — disques, réseau, pression mémoire, processus, score de redémarrage, batterie.</item>
+    /// <item>« SamplerSensors » — LibreHardwareMonitor et SMART.</item>
+    /// </list>
+    ///
+    /// Toute nouvelle source pouvant bloquer (WMI, pilote, disque, réseau) va sur un thread de publication,
+    /// jamais dans <c>Collect</c> : sur une machine saturée, ces sources ont été mesurées entre 5 et 19 s par appel,
+    /// ce qui faisait tomber la cadence à 20-60 s et empêchait les alertes de partir au moment où elles servent.
+    /// Le chronométrage par phase journalise tout dépassement dans <c>data\live.log</c>.</summary>
     public class Sampler : IDisposable
     {
         public event Action<Sample> SampleReady;
