@@ -225,6 +225,8 @@ namespace PerfMonitorLive.Metrics
                             int media = (int)D(o["MediaType"]), bus = (int)D(o["BusType"]);
                             string busName = BusName(bus);
                             var kind = bus == 17 ? DiskKind.Nvme : bus == 7 ? DiskKind.Usb : media == 4 ? DiskKind.Ssd : media == 3 ? DiskKind.Hdd : DiskKind.Unknown;
+                            // NVMe derrière un contrôleur RAID (Intel RST/VMD, courant sur portable) : le bus dit « RAID », le nom dit NVMe
+                            if (kind == DiskKind.Ssd && ((o["FriendlyName"] as string) ?? "").IndexOf("NVMe", StringComparison.OrdinalIgnoreCase) >= 0) kind = DiskKind.Nvme;
                             kinds[(string)o["DeviceId"]] = Tuple.Create(kind, busName);
                         }
                 }
@@ -233,6 +235,7 @@ namespace PerfMonitorLive.Metrics
                 {
                     var di = new DiskInfo { Index = (int)D(d["Index"]), Model = CleanModel((string)d["Model"]), SizeGB = Math.Round(D(d["Size"]) / 1e9), Bus = (string)d["InterfaceType"] };
                     if (kinds.TryGetValue(di.Index.ToString(), out var k)) { di.Kind = k.Item1; di.Bus = k.Item2; }
+                    if (di.Kind == DiskKind.Ssd && (((string)d["Model"]) ?? "").IndexOf("NVMe", StringComparison.OrdinalIgnoreCase) >= 0) di.Kind = DiskKind.Nvme;
                     if (di.Kind == DiskKind.Unknown)
                     {
                         var mt = ((string)d["MediaType"] ?? "") + " " + di.Model + " " + di.Bus;
@@ -282,13 +285,18 @@ namespace PerfMonitorLive.Metrics
         }
 
         /// <summary>Met à jour les capacités capteurs à partir d'un échantillon (appelé pendant les premières minutes).</summary>
-        public static bool UpdateCapabilities(Sample s, bool elevated)
+        public static bool UpdateCapabilities(Sample s, bool elevated, Hardware hw = null)
         {
             var m = Current; bool ch = false;
             void Set(ref bool f, bool v) { if (v && !f) { f = true; ch = true; } }
             bool a = m.CapCpuTemp, b = m.CapGpuTemp, c = m.CapFans, d = m.CapStorTemp, e = m.CapPower, f = m.CapClocks;
-            Set(ref a, s.temp.HasValue); Set(ref b, s.gpu.HasValue); Set(ref c, s.fans != null && s.fans.Any(x => x.rpm > 0));
-            Set(ref d, s.stor != null && s.stor.Any(x => x.t > 0)); Set(ref e, s.cpuW.HasValue || s.gpuW.HasValue); Set(ref f, s.cpuMHz.HasValue || s.gpuMHz.HasValue);
+            // hw : capteurs vus au moins une fois — un GPU hybride ne répond que lorsqu'il est actif
+            Set(ref a, s.temp.HasValue || (hw != null && hw.SawCpuTemp));
+            Set(ref b, s.gpu.HasValue || (hw != null && hw.SawGpuTemp));
+            Set(ref c, (s.fans != null && s.fans.Any(x => x.rpm > 0)) || (hw != null && hw.SawFans));
+            Set(ref d, s.stor != null && s.stor.Any(x => x.t > 0));
+            Set(ref e, s.cpuW.HasValue || s.gpuW.HasValue || (hw != null && (hw.SawCpuPower || hw.SawGpuPower)));
+            Set(ref f, s.cpuMHz.HasValue || s.gpuMHz.HasValue || (hw != null && (hw.SawCpuClock || hw.SawGpuClock)));
             m.CapCpuTemp = a; m.CapGpuTemp = b; m.CapFans = c; m.CapStorTemp = d; m.CapPower = e; m.CapClocks = f;
             if (m.Elevated != elevated) { m.Elevated = elevated; ch = true; }
             if (ch) m.Save();

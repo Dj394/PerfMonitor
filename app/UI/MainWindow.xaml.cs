@@ -68,7 +68,7 @@ namespace PerfMonitorLive.UI
             RefreshScreens();
             SettingsPanel.DataContext = _svm;
             BuildFixedCards();
-            Closing += (s, e) => { if (!_reallyClose) { e.Cancel = true; Hide(); } };
+            Closing += (s, e) => { if (!_reallyClose) { e.Cancel = true; Hide(); History?.Release(); } };
             IsVisibleChanged += (s, e) => { if (IsVisible) { RefreshScreens(); UpdatePauseText(); UpdateProfilePill(); } };
             SourceInitialized += (s, e) => CenterOnPrimary();
             InitAdvisor();
@@ -125,11 +125,12 @@ namespace PerfMonitorLive.UI
         {
             var s = _app.Settings; var m = Inventory.Current;
             var gpu = m.MainGpu; string gpuName = gpu != null ? " " + gpu.Short : "";
-            if (smp.gpu.HasValue && !_byKey.ContainsKey("gpuTemp")) Card("gpuTemp", "Température GPU", "🎮", s.Get("gpuTemp"));
-            if (smp.cpuMHz.HasValue && !_byKey.ContainsKey("cpuMHz")) Card("cpuMHz", "Fréquence CPU", "⚡", null);
-            if (smp.gpuMHz.HasValue && !_byKey.ContainsKey("gpuMHz")) Card("gpuMHz", "Fréquence GPU", "⚡", null);
-            if (smp.cpuW.HasValue && !_byKey.ContainsKey("cpuW")) Card("cpuW", "Consommation CPU", "🔌", s.Get("cpuW"));
-            if (smp.gpuW.HasValue && !_byKey.ContainsKey("gpuW")) Card("gpuW", "Consommation GPU", "🔌", s.Get("gpuW"));
+            var hw = _app.Sampler.Hw;   // un GPU hybride (Optimus) ne répond que réveillé : la carte reste dès qu'il a répondu une fois
+            if ((smp.gpu.HasValue || hw.SawGpuTemp) && !_byKey.ContainsKey("gpuTemp")) Card("gpuTemp", "Température GPU", "🎮", s.Get("gpuTemp"));
+            if ((smp.cpuMHz.HasValue || hw.SawCpuClock) && !_byKey.ContainsKey("cpuMHz")) Card("cpuMHz", "Fréquence CPU", "⚡", null);
+            if ((smp.gpuMHz.HasValue || hw.SawGpuClock) && !_byKey.ContainsKey("gpuMHz")) Card("gpuMHz", "Fréquence GPU", "⚡", null);
+            if ((smp.cpuW.HasValue || hw.SawCpuPower) && !_byKey.ContainsKey("cpuW")) Card("cpuW", "Consommation CPU", "🔌", s.Get("cpuW"));
+            if ((smp.gpuW.HasValue || hw.SawGpuPower) && !_byKey.ContainsKey("gpuW")) Card("gpuW", "Consommation GPU", "🔌", s.Get("gpuW"));
             if (smp.bat.HasValue && !_byKey.ContainsKey("bat")) Card("bat", "Batterie", "🔋", null, 100);
             foreach (var d in smp.disks)
             {
@@ -190,15 +191,16 @@ namespace PerfMonitorLive.UI
             }
             Upd("cpu", smp.cpu, Math.Round(smp.cpu) + " %", smp.procs.Count > 0 ? smp.procs[0].n + " " + smp.procs[0].cpu + " %" : "");
             Upd("memPct", smp.memPct, Math.Round(smp.memPct) + " %", (smp.memMB / 1024).ToString("0.0") + " / " + (smp.TotalMB / 1024).ToString("0.0") + " Go");
-            string noTemp = _app.Sampler.Hw.Available ? "capteur introuvable" : _app.Sampler.Hw.Status;
+            string noTemp = _app.Sampler.Hw.MissingReason;
             var cpuVendor = Inventory.Current.Cpu.Vendor;
             Upd("temp", smp.temp, smp.temp.HasValue ? smp.temp.Value.ToString("0") + " °C" : "—", smp.temp.HasValue ? (cpuVendor == Vendor.Amd ? "Tctl/Tdie" : cpuVendor == Vendor.Intel ? "package" : "CPU") : noTemp);
             if (smp.bat.HasValue) Upd("bat", smp.bat, smp.bat.Value.ToString("0") + " %", smp.ac == true ? "sur secteur" : "sur batterie");
-            Upd("gpuTemp", smp.gpu, smp.gpu.HasValue ? smp.gpu.Value.ToString("0") + " °C" : "—", smp.gpu.HasValue ? "cœur GPU" : noTemp);
+            string gpuOff = _app.Sampler.Hw.SawGpuTemp || _app.Sampler.Hw.SawGpuPower ? "GPU en veille (économie d'énergie)" : noTemp;
+            Upd("gpuTemp", smp.gpu, smp.gpu.HasValue ? smp.gpu.Value.ToString("0") + " °C" : "—", smp.gpu.HasValue ? "cœur GPU" : gpuOff);
             Upd("cpuMHz", smp.cpuMHz, smp.cpuMHz.HasValue ? (smp.cpuMHz.Value / 1000).ToString("0.00") + " GHz" : "—", smp.cpuMHz.HasValue ? "cœur le plus rapide" : noTemp);
-            Upd("gpuMHz", smp.gpuMHz, smp.gpuMHz.HasValue ? smp.gpuMHz.Value.ToString("0") + " MHz" : "—", smp.gpuMHz.HasValue ? "cœur GPU" : noTemp);
+            Upd("gpuMHz", smp.gpuMHz, smp.gpuMHz.HasValue ? smp.gpuMHz.Value.ToString("0") + " MHz" : "—", smp.gpuMHz.HasValue ? "cœur GPU" : gpuOff);
             Upd("cpuW", smp.cpuW, smp.cpuW.HasValue ? smp.cpuW.Value.ToString("0") + " W" : "—", smp.cpuW.HasValue ? "package" : noTemp);
-            Upd("gpuW", smp.gpuW, smp.gpuW.HasValue ? smp.gpuW.Value.ToString("0") + " W" : "—", smp.gpuW.HasValue ? "carte" : noTemp);
+            Upd("gpuW", smp.gpuW, smp.gpuW.HasValue ? smp.gpuW.Value.ToString("0") + " W" : "—", smp.gpuW.HasValue ? "carte" : gpuOff);
             foreach (var f in smp.fans) Upd("fan:" + f.n, f.rpm, f.rpm + " tr/min", f.rpm == 0 ? "arrêté ou non lu" : "");
             foreach (var st in smp.stor)
             {

@@ -8,6 +8,27 @@ if (-not $isAdmin) {
     Start-Process powershell.exe -Verb RunAs -Wait -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`""
     exit
 }
+# 0) PawnIO : depuis la version 0.9.5, LibreHardwareMonitor n'embarque plus de pilote noyau et passe par lui.
+# Sans PawnIO : ni temperature, ni frequence, ni consommation CPU, ni ventilateurs (le GPU et le SMART restent lisibles).
+$pawn = (Test-Path (Join-Path $env:ProgramFiles 'PawnIO\PawnIOLib.dll')) -or [bool](Get-Service PawnIO -ErrorAction SilentlyContinue)
+if (-not $pawn) {
+    Write-Host ""
+    Write-Warning "PawnIO n'est pas installe : les temperatures, frequences et consommations CPU ainsi que les ventilateurs resteront indisponibles."
+    $rep = Read-Host "Telecharger et lancer l'installeur officiel (signe) maintenant ? [O/n]"
+    if ($rep -eq '' -or $rep -match '^[oy]') {
+        $tmp = Join-Path $env:TEMP 'PawnIO_setup.exe'
+        try {
+            Invoke-WebRequest -Uri 'https://github.com/namazso/PawnIO.Setup/releases/latest/download/PawnIO_setup.exe' -OutFile $tmp -UseBasicParsing
+            $sig = Get-AuthenticodeSignature $tmp
+            if ($sig.Status -ne 'Valid') { Write-Warning "Signature $($sig.Status) : installation annulee. Fichier conserve : $tmp" }
+            else {
+                Write-Host "Signature verifiee : $($sig.SignerCertificate.Subject)"
+                Start-Process $tmp -Wait
+                Write-Host "PawnIO installe (choisir l'edition officielle dans l'assistant)."
+            }
+        } catch { Write-Warning "Telechargement impossible ($($_.Exception.Message)). A installer manuellement depuis https://pawnio.eu" }
+    } else { Write-Host "Ignore : installable plus tard depuis https://pawnio.eu" }
+}
 # 1) nettoyage : ancien collecteur, cle Run, instances en cours
 if (Get-ScheduledTask PerfMonitor -ErrorAction SilentlyContinue) { Unregister-ScheduledTask PerfMonitor -Confirm:$false; Write-Host "Ancienne tache 'PerfMonitor' retiree." }
 Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" | Where-Object { $_.CommandLine -like '*collect.ps1*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
