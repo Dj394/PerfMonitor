@@ -4,7 +4,7 @@ Supervision temps réel d'un PC Windows (CPU, RAM, disques, températures, venti
 
 ## Installation rapide (utilisateur)
 1. Prérequis : Windows 10/11 x64 et le **[.NET 10 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/10.0)** (« Run desktop apps » x64) — ou prendre la variante *Portable* de la Release, qui l'inclut.
-2. Télécharger la dernière **Release** (`PerfMonitorLive.exe`) et la placer dans un dossier de votre choix avec `install-live.ps1`, `report.ps1`, `template.html`, `note.ps1` (ou cloner ce dépôt et lancer `.uild.ps1` — nécessite le SDK .NET 10).
+2. Télécharger la dernière **[Release](https://github.com/Dj394/PerfMonitor/releases/latest)** (`PerfMonitorLive.exe`) et la placer dans un dossier de votre choix avec `install-live.ps1`, `report.ps1`, `template.html`, `note.ps1` (ou cloner ce dépôt et lancer `.uild.ps1` — nécessite le SDK .NET 10).
 3. Clic droit sur `install-live.ps1` › *Exécuter avec PowerShell* → une invite UAC (l'appli tourne en administrateur pour lire les températures). Ça crée la tâche planifiée « PerfMonitorLive » (démarrage à l'ouverture de session) et les raccourcis Bureau / menu Démarrer.
 4. Au premier lancement : SmartScreen peut afficher « Windows a protégé votre PC » (exe non signé) → *Informations complémentaires* › *Exécuter quand même*. L'onglet **Machine** montre ce qui a été détecté et quels capteurs sont disponibles.
 
