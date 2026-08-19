@@ -18,8 +18,10 @@ foreach(`$e in (Get-MpPreference -EA SilentlyContinue).ExclusionPath){ if(`$e -a
 "@
 if ($delPawn) {
     $elev += @"
-`$u = Get-ChildItem (Join-Path `$env:ProgramFiles 'PawnIO') -Filter 'unins*.exe' -EA SilentlyContinue | Select -First 1
-if (`$u) { Start-Process `$u.FullName '/VERYSILENT /NORESTART' -Wait }
+`$k = Get-ItemProperty HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*,HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\* -EA SilentlyContinue | Where-Object DisplayName -match '^PawnIO' | Select -First 1
+`$u = Join-Path `$env:ProgramFiles 'PawnIO\uninstall.exe'
+if (`$k.QuietUninstallString) { Start-Process cmd.exe "/c `$(`$k.QuietUninstallString)" -Wait } elseif (Test-Path `$u) { Start-Process `$u '-uninstall -silent' -Wait }
+if (`$k) { Remove-Item `$k.PSPath -Force -EA SilentlyContinue }
 `$inf = (pnputil /enum-drivers | Out-String) -split "`r?`n"; `$i = (`$inf | Select-String 'pawnio.inf').LineNumber
 if (`$i) { `$oem = (`$inf[`$i-2] -replace '.*:\s*','').Trim(); pnputil /delete-driver `$oem /uninstall /force | Out-Null }
 sc.exe stop PawnIO | Out-Null; sc.exe delete PawnIO | Out-Null
