@@ -12,5 +12,5 @@ PerfMonitor Live - installation
 
 Prerequis : Windows 10/11 64 bits (le runtime .NET 10 est installe par Installer.cmd s'il manque ; sans Internet, prenez le zip "portable" qui l'embarque).
 
-Desinstaller : Desinstaller.cmd (puis supprimer le dossier).
+Desinstaller : Desinstaller.cmd (tache planifiee + raccourcis, puis propose de supprimer le dossier complet et PawnIO).
 Un souci ? Onglet Machine > Copier, et le fichier data\live.log : https://github.com/Dj394/PerfMonitor/issues

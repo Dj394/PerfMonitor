@@ -1,5 +1,13 @@
 @echo off
-:: PerfMonitor Live - desinstallation (tache planifiee + raccourcis ; le dossier et vos donnees restent)
+:: PerfMonitor Live - desinstallation complete : tache planifiee, raccourcis, exclusion Defender, puis (au choix) le dossier et PawnIO
 title Desinstallation de PerfMonitor Live
-powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$isAdmin=([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator); if(-not $isAdmin){Start-Process powershell.exe -Verb RunAs -Wait -ArgumentList '-NoProfile -ExecutionPolicy Bypass -Command \"Stop-ScheduledTask PerfMonitorLive -EA SilentlyContinue; Get-Process PerfMonitorLive -EA SilentlyContinue | Stop-Process -Force; Unregister-ScheduledTask PerfMonitorLive -Confirm:$false -EA SilentlyContinue\"'} else {Stop-ScheduledTask PerfMonitorLive -EA SilentlyContinue; Get-Process PerfMonitorLive -EA SilentlyContinue | Stop-Process -Force; Unregister-ScheduledTask PerfMonitorLive -Confirm:$false -EA SilentlyContinue}; foreach($d in @([Environment]::GetFolderPath('Desktop'),[Environment]::GetFolderPath('Programs'))){Remove-Item (Join-Path $d 'PerfMonitor Live.lnk') -EA SilentlyContinue}; Write-Host 'PerfMonitor Live desinstalle (tache planifiee et raccourcis supprimes). Vous pouvez supprimer le dossier.'"
+set "DIR=%~dp0"
+if "%DIR:~-1%"=="\" set "DIR=%DIR:~0,-1%"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%DIR%\desinstaller.ps1" -Dir "%DIR%"
+if exist "%DIR%\.supprimer-dossier" (
+    del /q "%DIR%\.supprimer-dossier" >nul 2>&1
+    echo Suppression du dossier %DIR% ...
+    start "" /min cmd /c "timeout /t 2 /nobreak >nul & rd /s /q "%DIR%""
+    exit
+)
 pause

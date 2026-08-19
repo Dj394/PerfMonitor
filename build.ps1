@@ -14,7 +14,7 @@ Write-Host "OK -> $PSScriptRoot\PerfMonitorLive.exe"
 if ($Zip) {
     $ver = ([xml](Get-Content "$app\PerfMonitorLive.csproj")).Project.PropertyGroup.Version | Select-Object -First 1
     $name = "PerfMonitor-$ver" + $(if ($Portable) { '-portable' } else { '' }) + '.zip'
-    $files = @('PerfMonitorLive.exe','install-live.ps1','report.ps1','template.html','note.ps1','Installer.cmd','Desinstaller.cmd','LISEZMOI.txt','Get-PerfMonitor.ps1') | ForEach-Object { Join-Path $PSScriptRoot $_ } | Where-Object { Test-Path $_ }
+    $files = @('PerfMonitorLive.exe','install-live.ps1','report.ps1','template.html','note.ps1','Installer.cmd','Desinstaller.cmd','desinstaller.ps1','LISEZMOI.txt','Get-PerfMonitor.ps1') | ForEach-Object { Join-Path $PSScriptRoot $_ } | Where-Object { Test-Path $_ }
     Compress-Archive -Path $files -DestinationPath (Join-Path $PSScriptRoot $name) -Force
     $fixed = 'PerfMonitor' + $(if ($Portable) { '-portable' } else { '' }) + '.zip'   # nom fixe : lien stable .../releases/latest/download/PerfMonitor.zip
     Copy-Item (Join-Path $PSScriptRoot $name) (Join-Path $PSScriptRoot $fixed) -Force

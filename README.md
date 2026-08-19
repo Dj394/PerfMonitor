@@ -15,7 +15,7 @@ Installe dans `%LOCALAPPDATA%\PerfMonitor` (option `-Dir` pour choisir, `-Portab
 3. Double-clic sur **`Installer.cmd`** → une invite UAC (l'appli lit les capteurs en administrateur). Le script installe **le runtime .NET 10** s'il manque (silencieux, Microsoft) et propose **PawnIO**. Ça crée la tâche planifiée « PerfMonitorLive » (démarrage à l'ouverture de session) et les raccourcis Bureau / menu Démarrer.
 4. Au double-clic sur `Installer.cmd`, Windows peut afficher « Avertissement de sécurité » → *Exécuter* (le script retire ensuite la marque du Web : plus d'avertissement pour l'exe, les raccourcis ni les mises à jour). L'onglet **Machine** montre ce qui a été détecté ; ensuite les mises à jour s'installent seules.
 
-Désinstaller : `Desinstaller.cmd` (tâche planifiée + raccourcis), puis supprimer le dossier. Rien n'est écrit ailleurs que dans le dossier de l'application (`data\`, `settings.json`).
+Désinstaller : `Desinstaller.cmd` — retire la tâche planifiée, les raccourcis et l'éventuelle exclusion Defender, puis propose de supprimer le dossier complet (`data`, `settings.json`) et le pilote PawnIO (opt-in). Rien n'est écrit ailleurs que dans le dossier de l'application.
 
 Limites connues : sans **PawnIO** (voir prérequis), ou si un antivirus d'entreprise bloque son pilote, il n'y a ni température/fréquence/consommation CPU ni ventilateurs — le reste fonctionne. Sur un portable à **GPU hybride** (Optimus/Switchable), la carte graphique dédiée ne répond que lorsqu'elle est active : les cartes GPU affichent alors « GPU en veille ». Testé sur PC fixe AMD et sur portable Intel + NVIDIA ; signalez les soucis avec le contenu de l'onglet Machine (bouton **Copier**) et `data\live.log`.
 
