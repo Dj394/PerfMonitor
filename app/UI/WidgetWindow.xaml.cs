@@ -38,7 +38,9 @@ namespace PerfMonitorLive.UI
             T3.Text = smp.gpu.HasValue ? "GPU " + smp.gpu.Value.ToString("0") + " °C" : "GPU —"; T3.Foreground = Palette.B(smp.gpu >= 90 ? Palette.Bad : smp.gpu >= 80 ? Palette.Warn : Palette.Good);
             T4.Text = "RAM " + Math.Round(smp.memPct) + " %"; T4.Foreground = Palette.B(smp.memPct >= 90 ? Palette.Bad : smp.memPct >= 80 ? Palette.Warn : Palette.Good);
             var d = smp.disks.OrderByDescending(x => x.pct).FirstOrDefault();
-            T5.Text = d != null ? "💽 " + d.n.Split(' ').Last() + " " + d.pct + " %" : ""; T5.Foreground = Palette.B(d != null && d.pct >= 90 ? Palette.Bad : Palette.Muted);
+            // en jeu, les images par seconde priment sur l'activite disque : c'est ce qu'on regarde a ce moment-la
+            if (smp.fps.HasValue) { T5.Text = smp.fps.Value.ToString("0") + " FPS"; T5.Foreground = Palette.B(smp.fps < 30 ? Palette.Bad : smp.fps < 60 ? Palette.Warn : Palette.Good); }
+            else { T5.Text = d != null ? "💽 " + d.n.Split(' ').Last() + " " + d.pct + " %" : ""; T5.Foreground = Palette.B(d != null && d.pct >= 90 ? Palette.Bad : Palette.Muted); }
         }
 
         void PlacePx(int x, int y)

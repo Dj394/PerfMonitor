@@ -39,6 +39,9 @@ namespace PerfMonitorLive.Metrics
         bool _tempTried, _tempAvailable;
         DateTime _batTime = DateTime.MinValue; double? _bat; bool? _ac; bool _batAbsent;
         public Hardware Hw { get; } = new Hardware();
+        /// <summary>Compteur d'images par seconde (ETW). Son <see cref="FpsMeter.TargetPid"/> est branche par l'application
+        /// sur le PID du jeu detecte ; sans jeu au premier plan il ne renvoie rien.</summary>
+        public FpsMeter Fps { get; } = new FpsMeter();
         public LeakDetector Leaks { get; } = new LeakDetector();
         readonly RebootCheck _reboot = new RebootCheck();
         static readonly Regex ProcSuffix = new Regex(@"#\d+$", RegexOptions.Compiled);
@@ -59,7 +62,7 @@ namespace PerfMonitorLive.Metrics
             _wmiThread = new Thread(WmiLoop) { IsBackground = true, Name = "SamplerWmi" };
             _sensorThread = new Thread(SensorLoop) { IsBackground = true, Name = "SamplerSensors" };
         }
-        public void Start() { _thread.Start(); _wmiThread.Start(); _sensorThread.Start(); }
+        public void Start() { Fps.Start(); _thread.Start(); _wmiThread.Start(); _sensorThread.Start(); }
 
         /// <summary>Capteurs matériels sur leur propre thread : LibreHardwareMonitor et la lecture SMART ont été
         /// mesurés jusqu'à 14,7 s sur une machine saturée. Températures et consommations n'ont pas besoin d'être
@@ -188,6 +191,8 @@ namespace PerfMonitorLive.Metrics
             _phases = sb.ToString();
             s.temp = r.Cpu; s.gpu = r.Gpu; s.cpuMHz = r.CpuMHz; s.gpuMHz = r.GpuMHz; s.cpuW = r.CpuW; s.gpuW = r.GpuW;
             s.fans = r.Fans; s.stor = r.Storage;
+            s.v12 = r.V12; s.v5 = r.V5; s.v33 = r.V33; s.volts = r.Volts;
+            s.fps = Fps.Read();   // un seul appel par mesure : la lecture consomme le compteur pour calculer un debit
             if (!Hw.Available && (!_tempTried || _tempAvailable))
             {
                 try
@@ -261,6 +266,6 @@ namespace PerfMonitorLive.Metrics
             using (var c = s.Get())
                 foreach (ManagementObject o in c) { using (o) yield return o; }
         }
-        public void Dispose() { _run = false; Hw.Dispose(); }
+        public void Dispose() { _run = false; Hw.Dispose(); Fps.Dispose(); }
     }
 }

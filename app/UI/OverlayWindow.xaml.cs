@@ -32,6 +32,9 @@ namespace PerfMonitorLive.UI
 
         public void Update(Sample s)
         {
+            // FPS : vide tant que le compteur n'a pas deux points de mesure sur le meme jeu (premiere seconde)
+            FpsText.Text = s.fps.HasValue ? s.fps.Value.ToString("0") + " FPS" : "";
+            FpsText.Foreground = Palette.B(!s.fps.HasValue ? Palette.Good : s.fps < 30 ? Palette.Bad : s.fps < 60 ? Palette.Warn : Palette.Good);
             CpuText.Text = "CPU " + Math.Round(s.cpu) + " %";
             CpuText.Foreground = Palette.B(s.cpu >= 90 ? Palette.Bad : s.cpu >= 70 ? Palette.Warn : Palette.Good);
             TempText.Text = s.temp.HasValue ? "🌡 " + s.temp.Value.ToString("0") + " °C" : "";

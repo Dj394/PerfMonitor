@@ -55,8 +55,8 @@ namespace PerfMonitorLive.Metrics
                 {
                     h.Update();
                     Note(h);
-                    Paths.Log("Capteur " + h.HardwareType + " [" + Clean(h.Name) + "] : " + string.Join(" | ", h.Sensors.Where(x => x.SensorType == SensorType.Temperature || x.SensorType == SensorType.Fan || x.SensorType == SensorType.Clock || x.SensorType == SensorType.Power).Select(x => x.SensorType + ":" + x.Name + "=" + x.Value)));
-                    foreach (var sub in h.SubHardware) { sub.Update(); Note(sub); Paths.Log("  sous-capteur " + sub.HardwareType + " [" + Clean(sub.Name) + "] : " + string.Join(" | ", sub.Sensors.Where(x => x.SensorType == SensorType.Fan || x.SensorType == SensorType.Temperature).Select(x => x.SensorType + ":" + x.Name + "=" + x.Value))); }
+                    Paths.Log("Capteur " + h.HardwareType + " [" + Clean(h.Name) + "] : " + string.Join(" | ", h.Sensors.Where(x => x.SensorType == SensorType.Temperature || x.SensorType == SensorType.Fan || x.SensorType == SensorType.Clock || x.SensorType == SensorType.Power || x.SensorType == SensorType.Voltage).Select(x => x.SensorType + ":" + x.Name + "=" + x.Value)));
+                    foreach (var sub in h.SubHardware) { sub.Update(); Note(sub); Paths.Log("  sous-capteur " + sub.HardwareType + " [" + Clean(sub.Name) + "] : " + string.Join(" | ", sub.Sensors.Where(x => x.SensorType == SensorType.Fan || x.SensorType == SensorType.Temperature || x.SensorType == SensorType.Voltage).Select(x => x.SensorType + ":" + x.Name + "=" + x.Value))); }
                 }
                 return true;
             }
@@ -65,7 +65,7 @@ namespace PerfMonitorLive.Metrics
 
         /// <summary>Capteurs vus au moins une fois (à l'initialisation ou pendant une mesure). Un GPU hybride (Optimus)
         /// répond quand il est actif puis s'endort : la carte doit rester affichée, avec « en veille » à la place de la valeur.</summary>
-        public bool SawCpuTemp, SawCpuClock, SawCpuPower, SawGpuTemp, SawGpuClock, SawGpuPower, SawFans;
+        public bool SawCpuTemp, SawCpuClock, SawCpuPower, SawGpuTemp, SawGpuClock, SawGpuPower, SawFans, SawVolts;
 
         void Note(IHardware h)
         {
@@ -81,6 +81,7 @@ namespace PerfMonitorLive.Metrics
                         if (s.Value.Value < 150) { if (isGpu) SawGpuTemp = true; else if (isCpu) SawCpuTemp = true; }
                         break;
                     case SensorType.Fan: SawFans = true; break;
+                    case SensorType.Voltage: SawVolts = true; break;
                     case SensorType.Clock: if (isGpu) SawGpuClock = true; else if (isCpu) SawCpuClock = true; break;
                     case SensorType.Power: if (isGpu) SawGpuPower = true; else if (isCpu) SawCpuPower = true; break;
                 }
@@ -90,6 +91,8 @@ namespace PerfMonitorLive.Metrics
         public class Reading
         {
             public double? Cpu, Gpu, CpuMHz, GpuMHz, CpuW, GpuW;
+            public double? V12, V5, V33;
+            public List<VoltSample> Volts = new List<VoltSample>();
             public List<FanSample> Fans = new List<FanSample>();
             public List<StorSample> Storage = new List<StorSample>();
         }
@@ -102,7 +105,7 @@ namespace PerfMonitorLive.Metrics
             {
                 try
                 {
-                    bool mbDue = (DateTime.Now - _mbTime).TotalSeconds >= 5;   // carte mère (ventilateurs) : lecture SuperIO coûteuse, toutes les 5 s
+                    bool mbDue = (DateTime.Now - _mbTime).TotalSeconds >= MbIntervalSec;   // carte mère (ventilateurs, tensions) : lecture SuperIO coûteuse
                     foreach (var h in _pc.Hardware)
                     {
                         if (h.HardwareType == HardwareType.Motherboard)
@@ -113,8 +116,11 @@ namespace PerfMonitorLive.Metrics
                                 _mbTime = DateTime.Now; var tmp = new Reading();
                                 AddFans(h, "", tmp); foreach (var sub in h.SubHardware) AddFans(sub, "", tmp);
                                 _mbFans = tmp.Fans;
+                                AddVolts(h, tmp); foreach (var sub in h.SubHardware) AddVolts(sub, tmp);
+                                _mbVolts = tmp.Volts;
                             }
                             r.Fans.AddRange(_mbFans);
+                            r.Volts.AddRange(_mbVolts);
                             continue;
                         }
                         h.Update();
@@ -145,6 +151,8 @@ namespace PerfMonitorLive.Metrics
             if (r.CpuW.HasValue) SawCpuPower = true;
             if (r.GpuW.HasValue) SawGpuPower = true;
             if (r.Fans.Any(f => f.rpm > 0)) SawFans = true;
+            r.V12 = PickVolt(r.Volts, "12"); r.V5 = PickVolt(r.Volts, "5"); r.V33 = PickVolt(r.Volts, "3.3");
+            if (r.Volts.Count > 0) SawVolts = true;
             ReadStorageWmi(r);
             return r;
         }
@@ -171,7 +179,37 @@ namespace PerfMonitorLive.Metrics
             return _gpuWant < 0 ? 0 : _gpuWant;
         }
 
-        DateTime _mbTime = DateTime.MinValue; List<FanSample> _mbFans = new List<FanSample>();
+        /// <summary>Cadence de lecture du Super I/O (ventilateurs et tensions). Volontairement plus lente que la mesure :
+        /// l'appel est coûteux et ces grandeurs bougent lentement. Descendre à 1 s multiplie ce coût par cinq —
+        /// inutile pour voir un affaissement de rail, qui se joue sur des minutes.</summary>
+        public int MbIntervalSec = 5;
+
+        DateTime _mbTime = DateTime.MinValue; List<FanSample> _mbFans = new List<FanSample>(); List<VoltSample> _mbVolts = new List<VoltSample>();
+
+        /// <summary>Tensions des rails, lues sur le Super I/O de la carte mere. Tous les rails sont conserves tels quels :
+        /// le nommage depend de la puce (Nuvoton, ITE...) et du mappage que LibreHardwareMonitor a pour ce modele de carte,
+        /// donc on enregistre tout et on nomme ensuite ce qu'on reconnait.</summary>
+        static void AddVolts(IHardware h, Reading r)
+        {
+            foreach (var s in h.Sensors.Where(x => x.SensorType == SensorType.Voltage && x.Value.HasValue && x.Value.Value > 0))
+            {
+                var name = Clean(s.Name);
+                if (name.Length == 0 || r.Volts.Any(v => v.n == name)) continue;
+                r.Volts.Add(new VoltSample { n = name, v = Math.Round(s.Value.Value, 3) });
+            }
+        }
+        /// <summary>Retrouve un rail quel que soit le style du capteur : « +12V », « 12V », « +12V Voltage » donnent tous « 12 ».</summary>
+        static double? PickVolt(List<VoltSample> list, string rail)
+        {
+            foreach (var v in list) if (NormVolt(v.n) == rail) return v.v;
+            return null;
+        }
+        static string NormVolt(string n)
+        {
+            var s = (n ?? "").ToLowerInvariant().Replace("voltage", "").Replace("+", "").Replace(" ", "");
+            if (s.EndsWith("v")) s = s.Substring(0, s.Length - 1);
+            return s;
+        }
         static void AddFans(IHardware h, string prefix, Reading r)
         {
             foreach (var s in h.Sensors.Where(x => x.SensorType == SensorType.Fan && x.Value.HasValue))

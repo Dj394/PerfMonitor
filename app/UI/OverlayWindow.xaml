@@ -9,6 +9,7 @@
         <Border.Effect><DropShadowEffect BlurRadius="14" ShadowDepth="0" Opacity="0.5"/></Border.Effect>
         <StackPanel Orientation="Horizontal">
             <TextBlock x:Name="GameText" Text="🎮 Jeu" Foreground="#8C97A8" Margin="0,0,16,0" VerticalAlignment="Center" FontWeight="SemiBold"/>
+            <TextBlock x:Name="FpsText" Foreground="#E8ECF2" Margin="0,0,16,0" VerticalAlignment="Center" FontSize="16" FontWeight="Bold"/>
             <TextBlock x:Name="CpuText" Foreground="#E8ECF2" Margin="0,0,14,0" VerticalAlignment="Center"/>
             <TextBlock x:Name="TempText" Foreground="#E8ECF2" Margin="0,0,14,0" VerticalAlignment="Center"/>
             <TextBlock x:Name="GpuText" Foreground="#E8ECF2" Margin="0,0,14,0" VerticalAlignment="Center"/>

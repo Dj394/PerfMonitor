@@ -19,7 +19,7 @@ namespace PerfMonitorLive
         public ToastManager Toasts { get; private set; }
         public Sampler Sampler => _sampler;
         public GameDetector Games { get; private set; }
-        Sampler _sampler; HistoryWriter _history; TrayIcon _tray; MainWindow _main; Mutex _mutex;
+        Sampler _sampler; HistoryWriter _history; PowerLog _power; TrayIcon _tray; MainWindow _main; Mutex _mutex;
         OverlayWindow _overlay; WidgetWindow _widget;
         readonly DispatcherTimer _slow = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
         DateTime _lastHourly = DateTime.MinValue;
@@ -53,6 +53,7 @@ namespace PerfMonitorLive
             Games = new GameDetector(Settings);
             Toasts.GameActive = () => Games.Active;
             _history = new HistoryWriter();
+            _power = new PowerLog { GameActive = () => Games.Active };
             _tray = new TrayIcon();
             _main = new MainWindow(this);
 
@@ -74,6 +75,10 @@ namespace PerfMonitorLive
             ApplyStartup();
 
             _sampler = new Sampler();
+            _sampler.Fps.TargetPid = () => Games.Active ? Games.Pid : 0;
+            // Journal alimentation branché sur le thread de mesure, pas sur l'interface : quand la machine est
+            // saturée, le Dispatcher prend du retard — or c'est exactement là qu'on veut la trace des dernières secondes.
+            _sampler.SampleReady += s => _power.OnSample(s);
             _sampler.SampleReady += s => Dispatcher.BeginInvoke(new Action(() => OnSample(s)));
             _sampler.Start();
             _slow.Tick += (s, a) => SlowTick();

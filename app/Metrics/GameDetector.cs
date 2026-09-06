@@ -17,8 +17,11 @@ namespace PerfMonitorLive.Metrics
         readonly Settings _s;
         public bool Active { get; private set; }
         public string Game { get; private set; }
+        /// <summary>PID du jeu au premier plan, 0 si aucun. Sert a rattacher les images comptees par <see cref="FpsMeter"/>
+        /// au bon processus : le nom ne suffit pas, ETW ne connait que les PID.</summary>
+        public int Pid { get; private set; }
         DateTime _seenSince = DateTime.MinValue, _lastSeen = DateTime.MinValue, _start;
-        string _candidate;
+        string _candidate; int _fgPid;
         // stats de session
         int _n; double _cpuSum, _cpuMax, _tempMax, _gpuMax, _memMax;
         public event Action<string> Started;
@@ -42,6 +45,7 @@ namespace PerfMonitorLive.Metrics
                     try { using (var p = Process.GetProcessById((int)pid)) name = p.ProcessName; } catch { }
                     if (name != null && !Exclude.Contains(name))
                     {
+                        _fgPid = (int)pid;
                         if (_s.Games.Any(g => g.Equals(name, StringComparison.OrdinalIgnoreCase))) found = name;
                         else if (_s.GameAutoDetect && GetWindowRect(h, out var r))
                         {
@@ -60,6 +64,7 @@ namespace PerfMonitorLive.Metrics
             {
                 if (found != _candidate) { _candidate = found; _seenSince = now; }
                 _lastSeen = now;
+                Pid = _fgPid;
                 if (!Active && (now - _seenSince).TotalSeconds >= 8) Begin(found, now);
             }
             else if (Active && (now - _lastSeen).TotalSeconds >= 30) End(now);
@@ -84,7 +89,7 @@ namespace PerfMonitorLive.Metrics
             Active = false;
             var sess = new GameSession { ts = _start.ToString("yyyy-MM-ddTHH:mm:ss"), game = Game, min = Math.Round((now - _start).TotalMinutes, 1), cpuAvg = _n > 0 ? Math.Round(_cpuSum / _n) : 0, cpuMax = _cpuMax, tempMax = _tempMax, gpuMax = _gpuMax, memMax = Math.Round(_memMax) };
             try { Directory.CreateDirectory(Paths.DataDir); File.AppendAllText(Path.Combine(Paths.DataDir, "sessions.jsonl"), JsonSerializer.Serialize(sess) + "\n", new UTF8Encoding(false)); } catch { }
-            Game = null; _candidate = null;
+            Game = null; _candidate = null; Pid = 0;
             Ended?.Invoke(sess);
         }
         public void ForceEnd() { if (Active) End(DateTime.Now); }

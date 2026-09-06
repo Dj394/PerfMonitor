@@ -100,7 +100,7 @@ namespace PerfMonitorLive.UI
         }
 
         // ------------------------------------------------------------------ cartes
-        static readonly string[] CardOrder = { "cpu", "memPct", "temp", "gpuTemp", "cpuMHz", "gpuMHz", "cpuW", "gpuW", "bat", "rx", "tx", "pageIn", "reboot", "disk.", "stor.", "fan:" };
+        static readonly string[] CardOrder = { "cpu", "memPct", "temp", "gpuTemp", "cpuMHz", "gpuMHz", "cpuW", "gpuW", "fps", "v12", "v5", "v33", "bat", "rx", "tx", "pageIn", "reboot", "disk.", "stor.", "fan:" };
         static int Rank(string key) { for (int i = 0; i < CardOrder.Length; i++) if (key == CardOrder[i] || key.StartsWith(CardOrder[i]) && CardOrder[i].EndsWith(".") || key.StartsWith(CardOrder[i]) && CardOrder[i].EndsWith(":")) return i; return CardOrder.Length; }
         MetricVm Card(string key, string title, string icon, Rule rule, double fixedMax = 0)
         {
@@ -131,6 +131,13 @@ namespace PerfMonitorLive.UI
             if ((smp.gpuMHz.HasValue || hw.SawGpuClock) && !_byKey.ContainsKey("gpuMHz")) Card("gpuMHz", "Fréquence GPU", "⚡", null);
             if ((smp.cpuW.HasValue || hw.SawCpuPower) && !_byKey.ContainsKey("cpuW")) Card("cpuW", "Consommation CPU", "🔌", s.Get("cpuW"));
             if ((smp.gpuW.HasValue || hw.SawGpuPower) && !_byKey.ContainsKey("gpuW")) Card("gpuW", "Consommation GPU", "🔌", s.Get("gpuW"));
+            // FPS : la carte n'apparait qu'une fois un jeu mesure, et reste ensuite (l'historique garde son interet hors jeu)
+            if (smp.fps.HasValue && !_byKey.ContainsKey("fps")) Card("fps", "Images par seconde", "🎞️", null);
+            // Tensions : seuls les trois rails identifiés ont une carte. Les autres capteurs du Super I/O
+            // (Vcore, AVCC, 3VSB, VIN…) restent enregistrés dans l'historique, mais encombreraient le tableau de bord.
+            if (smp.v12.HasValue && !_byKey.ContainsKey("v12")) Card("v12", "Rail +12 V", "⚡", null);
+            if (smp.v5.HasValue && !_byKey.ContainsKey("v5")) Card("v5", "Rail +5 V", "⚡", null);
+            if (smp.v33.HasValue && !_byKey.ContainsKey("v33")) Card("v33", "Rail +3,3 V", "⚡", null);
             if (smp.bat.HasValue && !_byKey.ContainsKey("bat")) Card("bat", "Batterie", "🔋", null, 100);
             foreach (var d in smp.disks)
             {
@@ -201,6 +208,11 @@ namespace PerfMonitorLive.UI
             Upd("gpuMHz", smp.gpuMHz, smp.gpuMHz.HasValue ? smp.gpuMHz.Value.ToString("0") + " MHz" : "—", smp.gpuMHz.HasValue ? "cœur GPU" : gpuOff);
             Upd("cpuW", smp.cpuW, smp.cpuW.HasValue ? smp.cpuW.Value.ToString("0") + " W" : "—", smp.cpuW.HasValue ? "package" : noTemp);
             Upd("gpuW", smp.gpuW, smp.gpuW.HasValue ? smp.gpuW.Value.ToString("0") + " W" : "—", smp.gpuW.HasValue ? "carte" : gpuOff);
+            Upd("fps", smp.fps, smp.fps.HasValue ? smp.fps.Value.ToString("0") + " FPS" : "—", smp.fps.HasValue ? "jeu au premier plan" : "aucun jeu detecte");
+            // Tolérance ATX : ±5 % sur chaque rail. Sortir de la fourchette basse sous charge est le signe recherché.
+            Upd("v12", smp.v12, smp.v12.HasValue ? smp.v12.Value.ToString("0.00") + " V" : "—", smp.v12.HasValue ? "toléré 11,40 – 12,60 V" : noTemp);
+            Upd("v5", smp.v5, smp.v5.HasValue ? smp.v5.Value.ToString("0.00") + " V" : "—", smp.v5.HasValue ? "toléré 4,75 – 5,25 V" : noTemp);
+            Upd("v33", smp.v33, smp.v33.HasValue ? smp.v33.Value.ToString("0.00") + " V" : "—", smp.v33.HasValue ? "toléré 3,14 – 3,47 V" : noTemp);
             foreach (var f in smp.fans) Upd("fan:" + f.n, f.rpm, f.rpm + " tr/min", f.rpm == 0 ? "arrêté ou non lu" : "");
             foreach (var st in smp.stor)
             {
