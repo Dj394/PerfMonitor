@@ -16,6 +16,10 @@ namespace PerfMonitorLive.Alerts
         public string RuleId; public string Title; public string Detail; public Severity Severity; public DateTime Time;
         public string Proc; public int ProcPid;                 // processus en tête (alertes CPU/RAM)
         public List<ToastAction> Actions = new List<ToastAction>();
+        /// <summary>Notification qui reste affichée jusqu'à fermeture (bilan quotidien, rapport d'arrêt brutal).</summary>
+        public bool Persistent;
+        /// <summary>Clic sur la notification (hors boutons) ; null = ouvrir la fenêtre principale.</summary>
+        public Action Click;
     }
 
     /// <summary>Évalue les règles à chaque échantillon : durée soutenue, cooldown, retour à la normale.</summary>

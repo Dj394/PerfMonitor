@@ -18,7 +18,9 @@ namespace PerfMonitorLive.Metrics
         public bool Active { get; private set; }
         public string Game { get; private set; }
         /// <summary>PID du jeu au premier plan, 0 si aucun. Sert a rattacher les images comptees par <see cref="FpsMeter"/>
-        /// au bon processus : le nom ne suffit pas, ETW ne connait que les PID.</summary>
+        /// au bon processus : le nom ne suffit pas, ETW ne connait que les PID.
+        /// Vaut 0 des que le jeu n'est plus au premier plan (alt-tab, jeu ferme), meme si la session reste active
+        /// pendant son hysteresis de 30 s, et pendant une session, 0 si une autre application plein ecran passe devant.</summary>
         public int Pid { get; private set; }
         DateTime _seenSince = DateTime.MinValue, _lastSeen = DateTime.MinValue, _start;
         string _candidate; int _fgPid;
@@ -65,15 +67,33 @@ namespace PerfMonitorLive.Metrics
                 }
             }
             catch { }
-            var now = DateTime.Now;
+            return Step(found, _fgPid, DateTime.Now, latest);
+        }
+
+        /// <summary>Logique de session, sans Win32 : <paramref name="found"/> = jeu au premier plan (null si aucun).
+        /// Un autre jeu au premier plan pendant une session ne la prolonge pas ; s'il y reste 8 s, la session en cours
+        /// se termine (rapport emis) et la sienne commence. Sans jeu au premier plan, la session dure encore 30 s.</summary>
+        internal bool Step(string found, int fgPid, DateTime now, Sample latest)
+        {
             if (found != null)
             {
-                if (found != _candidate) { _candidate = found; _seenSince = now; }
-                _lastSeen = now;
-                Pid = _fgPid;
+                if (!string.Equals(found, _candidate, StringComparison.OrdinalIgnoreCase)) { _candidate = found; _seenSince = now; }
+                bool same = Active && string.Equals(found, Game, StringComparison.OrdinalIgnoreCase);
+                if (same || !Active) _lastSeen = now;   // un autre jeu ne maintient pas la session en cours
+                Pid = ForegroundGamePid(Active, Game, found, fgPid);
+                if (Active && !same && (now - _seenSince).TotalSeconds >= 8)
+                {
+                    End(_lastSeen > _start ? _lastSeen : now);   // la session A s'arrete a sa derniere apparition
+                    Pid = ForegroundGamePid(false, null, found, fgPid);
+                }
                 if (!Active && (now - _seenSince).TotalSeconds >= 8) Begin(found, now);
+                else if (Active && !same && (now - _lastSeen).TotalSeconds >= 30) End(now);
             }
-            else if (Active && (now - _lastSeen).TotalSeconds >= 30) End(now);
+            else
+            {
+                Pid = 0;   // plus de jeu au premier plan : on ne mesure plus (sinon faux « 0 FPS » sur un PID absent ou masque)
+                if (Active && (now - _lastSeen).TotalSeconds >= 30) End(now);
+            }
             if (Active && latest != null)
             {
                 _n++; _cpuSum += latest.cpu; _cpuMax = Math.Max(_cpuMax, latest.cpu);
@@ -87,18 +107,36 @@ namespace PerfMonitorLive.Metrics
         void Begin(string game, DateTime now)
         {
             Active = true; Game = game; _start = now; _n = 0; _cpuSum = _cpuMax = _tempMax = _gpuMax = _memMax = 0;
-            Paths.Log("Session jeu : " + game);
+            Log("Session jeu : " + game);
             Started?.Invoke(game);
         }
         void End(DateTime now)
         {
             Active = false;
             var sess = new GameSession { ts = _start.ToString("yyyy-MM-ddTHH:mm:ss"), game = Game, min = Math.Round((now - _start).TotalMinutes, 1), cpuAvg = _n > 0 ? Math.Round(_cpuSum / _n) : 0, cpuMax = _cpuMax, tempMax = _tempMax, gpuMax = _gpuMax, memMax = Math.Round(_memMax) };
-            try { Directory.CreateDirectory(Paths.DataDir); File.AppendAllText(Path.Combine(Paths.DataDir, "sessions.jsonl"), JsonSerializer.Serialize(sess) + "\n", new UTF8Encoding(false)); } catch { }
+            try { Save(sess); } catch { }
             Game = null; _candidate = null; Pid = 0;
             Ended?.Invoke(sess);
         }
+
+        /// <summary>Journal et persistance des sessions ; remplaçables par les tests (qui n'ecrivent pas dans data/).</summary>
+        internal Action<string> Log = Paths.Log;
+        internal Action<GameSession> Save = sess =>
+        {
+            Directory.CreateDirectory(Paths.DataDir);
+            File.AppendAllText(Path.Combine(Paths.DataDir, "sessions.jsonl"), JsonSerializer.Serialize(sess) + "\n", new UTF8Encoding(false));
+        };
         public void ForceEnd() { if (Active) End(DateTime.Now); }
+
+        /// <summary>PID a mesurer pour l'application <paramref name="found"/> au premier plan. Hors session : le sien
+        /// (la session demarrera dessus). En session : seulement s'il s'agit du jeu suivi (meme nom, eventuellement
+        /// relance sous un autre PID) ; une autre application plein ecran ne detourne pas la mesure.</summary>
+        internal static int ForegroundGamePid(bool active, string game, string found, int fgPid)
+        {
+            if (found == null || fgPid <= 0) return 0;
+            if (active && !string.Equals(found, game, StringComparison.OrdinalIgnoreCase)) return 0;
+            return fgPid;
+        }
 
         int _namePid = -1; string _nameOfPid;
         readonly char[] _pathBuf = new char[1024];

@@ -15,3 +15,8 @@ PerfMonitorLive.exe
 *.old
 *.zip
 SOUMISSION-MICROSOFT.txt
+
+# Tests
+tests/**/bin/
+tests/**/obj/
+.claude/worktrees/

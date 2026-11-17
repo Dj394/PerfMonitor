@@ -60,14 +60,20 @@ namespace PerfMonitorLive.UI
         // Carte non affichée (fenêtre cachée/réduite, autre onglet) : l'historique continue d'être alimenté,
         // mais ni recalcul du rendu ni notification ; tout est rafraîchi d'un coup au retour (SetLive(true)).
         bool _quiet, _dirty;
-        protected override void Raise([CallerMemberName] string n = null) { if (_quiet) { _dirty = true; return; } base.Raise(n); }
+        // Noms notifiés pendant le sommeil : seuls ceux-là sont renvoyés au réveil. Pas de notification globale
+        // (string.Empty), qui rafraîchirait aussi Seuil/Durée et écraserait une saisie pas encore validée (LostFocus).
+        readonly HashSet<string> _pending = new HashSet<string>();
+        protected override void Raise([CallerMemberName] string n = null) { if (_quiet) { _dirty = true; if (!string.IsNullOrEmpty(n)) _pending.Add(n); return; } base.Raise(n); }
         public void SetLive(bool live)
         {
             if (live != _quiet) return;          // déjà dans cet état
             if (!live) { _quiet = true; return; }
-            if (_dirty && _count > 0) Rebuild();   // encore silencieux : les notifications sont remplacées par la notification globale
+            if (_dirty && _count > 0) Rebuild();   // encore silencieux : les propriétés modifiées sont mémorisées dans _pending
             _quiet = false;
-            if (_dirty) { _dirty = false; base.Raise(string.Empty); }
+            _dirty = false;
+            if (_pending.Count == 0) return;
+            var names = _pending.ToArray(); _pending.Clear();
+            foreach (var n in names) base.Raise(n);
         }
         /// <summary>Recalcule le rendu (ex. changement de thème) ; différé si la carte n'est pas affichée.</summary>
         public void Invalidate() => Refresh();

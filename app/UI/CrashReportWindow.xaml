@@ -1,0 +1,83 @@
+<Window x:Class="PerfMonitorLive.UI.CrashReportWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Arrêt brutal — PerfMonitor" Width="780" Height="720" MinWidth="560" MinHeight="460" WindowStartupLocation="CenterScreen"
+        WindowStyle="None" AllowsTransparency="True" Background="Transparent" ResizeMode="CanResizeWithGrip" ShowInTaskbar="True"
+        Foreground="{DynamicResource FgBrush}" FontFamily="Segoe UI" FontSize="13" UseLayoutRounding="True" TextOptions.TextFormattingMode="Display">
+    <Window.Resources>
+        <Style TargetType="Button">
+            <Setter Property="Background" Value="{DynamicResource ButtonBgBrush}"/><Setter Property="Foreground" Value="{DynamicResource FgBrush}"/>
+            <Setter Property="Padding" Value="14,7"/><Setter Property="Cursor" Value="Hand"/><Setter Property="FontWeight" Value="Medium"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Bd" Background="{TemplateBinding Background}" CornerRadius="8" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Bd" Property="Background" Value="{DynamicResource ButtonHoverBrush}"/></Trigger>
+                            <Trigger Property="IsPressed" Value="True"><Setter TargetName="Bd" Property="Background" Value="{DynamicResource ButtonPressedBrush}"/></Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="PrimaryButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+            <Setter Property="Background" Value="{DynamicResource PrimaryBtnBrush}"/><Setter Property="Foreground" Value="#FFFFFF"/>
+        </Style>
+        <Style x:Key="ChartBox" TargetType="Border">
+            <Setter Property="Background" Value="{DynamicResource Panel2Brush}"/><Setter Property="CornerRadius" Value="10"/>
+            <Setter Property="Padding" Value="10,8"/><Setter Property="Margin" Value="0,0,8,8"/>
+        </Style>
+    </Window.Resources>
+    <Border Background="{DynamicResource PanelBrush}" BorderBrush="{DynamicResource GridBrush}" BorderThickness="1" CornerRadius="16" Margin="12">
+        <Border.Effect><DropShadowEffect BlurRadius="24" ShadowDepth="0" Color="#000000" Opacity="0.5"/></Border.Effect>
+        <Grid Margin="22,16,22,16">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*" MinHeight="90"/><RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+
+            <!-- en-tête (glisser = déplacer) -->
+            <DockPanel x:Name="Header" Background="Transparent" Margin="0,0,0,10">
+                <Button x:Name="CloseBtn" DockPanel.Dock="Right" Content="✕" Background="Transparent" Foreground="{DynamicResource MutedBrush}" Padding="8,2" VerticalAlignment="Top" Click="Close_Click" ToolTip="Fermer"/>
+                <Border x:Name="Dot" Width="42" Height="42" CornerRadius="21" Margin="0,0,14,0" VerticalAlignment="Top">
+                    <TextBlock Text="⚡" FontSize="20" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                </Border>
+                <StackPanel VerticalAlignment="Center">
+                    <TextBlock x:Name="TitleText" FontSize="18" FontWeight="SemiBold" Foreground="{DynamicResource TitleFgBrush}" TextWrapping="Wrap"/>
+                    <TextBlock x:Name="SubText" Foreground="{DynamicResource MutedBrush}" TextWrapping="Wrap" Margin="0,2,0,0"/>
+                </StackPanel>
+            </DockPanel>
+
+            <!-- indices -->
+            <StackPanel Grid.Row="1" Margin="0,0,0,10">
+                <TextBlock Text="Indices" FontWeight="SemiBold" Foreground="{DynamicResource TitleFgBrush}" Margin="0,0,0,4"/>
+                <StackPanel x:Name="FindingsPanel"/>
+                <TextBlock x:Name="NoteText" Foreground="{DynamicResource MutedBrush}" FontSize="11.5" TextWrapping="Wrap" Margin="0,6,0,0"
+                           Text="Mesures logicielles, une par seconde (tensions relues toutes les 5 s) : un pic transitoire très bref reste invisible, et une cause logicielle (pilote, RAM, overclock) ne laisse souvent aucune trace dans les capteurs. Ce sont des pistes, pas un verdict."/>
+            </StackPanel>
+
+            <!-- mini-courbes de la dernière minute -->
+            <StackPanel Grid.Row="2">
+                <TextBlock x:Name="ChartsCaption" Foreground="{DynamicResource MutedBrush}" FontSize="11.5" Margin="0,0,0,6"/>
+                <Grid x:Name="ChartsGrid" Margin="0,0,-8,0">
+                    <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition/></Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                </Grid>
+            </StackPanel>
+
+            <!-- tableau des dernières secondes -->
+            <TextBox Grid.Row="3" x:Name="TableBox" IsReadOnly="True" FontFamily="Consolas" FontSize="12" Margin="0,2,0,0" Padding="8,6"
+                     Background="{DynamicResource InputBgBrush}" Foreground="{DynamicResource FgBrush}" BorderBrush="{DynamicResource InputBorderBrush}" BorderThickness="1"
+                     VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" TextWrapping="NoWrap"/>
+
+            <DockPanel Grid.Row="4" Margin="0,12,0,0" LastChildFill="False">
+                <TextBlock x:Name="FileText" DockPanel.Dock="Left" Foreground="{DynamicResource MutedBrush}" FontSize="11.5" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" MaxWidth="300"/>
+                <Button DockPanel.Dock="Right" Content="Fermer" Click="Close_Click" Margin="8,0,0,0"/>
+                <Button x:Name="CopyBtn" DockPanel.Dock="Right" Content="Copier" Click="Copy_Click" Style="{StaticResource PrimaryButton}" Margin="8,0,0,0" IsEnabled="False"
+                        ToolTip="Copie le diagnostic et le tableau, à coller dans un forum ou une demande de support"/>
+                <Button x:Name="OpenBtn" DockPanel.Dock="Right" Content="Ouvrir le journal" Click="Open_Click"/>
+            </DockPanel>
+        </Grid>
+    </Border>
+</Window>

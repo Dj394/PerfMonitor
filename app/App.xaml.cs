@@ -71,6 +71,7 @@ namespace PerfMonitorLive
             _tray.HistoryClicked += () => { ShowMain(); _main.ShowTab("Historique"); };
             _tray.ReportClicked += OpenReport;
             _tray.DigestClicked += () => ShowDigest(DateTime.Today.AddDays(-1), true);
+            _tray.CrashClicked += () => ShowCrashReport(_lastCrash);
             _tray.TestClicked += TestToast;
             _tray.WidgetToggled += () => { Settings.WidgetEnabled = !Settings.WidgetEnabled; Settings.Save(); OnSettingsChanged(); };
             _tray.ProfileSelected += name => { if (name == "Auto") { Settings.ProfileAuto = true; Settings.Save(); ApplyAutoProfile(); } else { Settings.ProfileAuto = false; SwitchProfile(name); } };
@@ -101,6 +102,8 @@ namespace PerfMonitorLive
                 try { BootReport.Refresh(); var boots = BootReport.Load(); var last = boots.LastOrDefault(); Dispatcher.BeginInvoke(new Action(() => { _lastBoot = last; _hasBoot = true; _main?.SetLastBoot(last); })); }
                 catch (Exception ex) { Paths.Log("boot: " + ex.Message); }
             });
+            // arrêt brutal depuis la dernière exécution : une seule vérification, au démarrage, hors thread UI
+            if (!Paths.Bench || e.Args.Any(a => a.Equals("--crash-check", StringComparison.OrdinalIgnoreCase))) ThreadPool.QueueUserWorkItem(_ => CheckCrash());
 
             if (!trayOnly) ShowMain();
             OnSettingsChanged();
@@ -313,6 +316,7 @@ namespace PerfMonitorLive
                 Games.Tick(_last);
                 if (Settings.ProfileAuto) ApplyAutoProfile();
                 if ((DateTime.Now - _lastHourly).TotalMinutes >= 10) { _lastHourly = DateTime.Now; MaybeDigest(); MaybeCheckUpdate(); }
+                if (_crashPending != null) TryShowCrashToast();
             }
             catch (Exception ex) { Paths.Log("slow: " + ex.Message); }
         }
@@ -404,23 +408,18 @@ namespace PerfMonitorLive
             if (!_widget.IsVisible) _widget.Show();
             if (_last != null) _widget.Update(_last);
         }
-        /// <summary>Nom du processus au premier plan. Le nom est gardé tant que le PID au premier plan ne change pas :
-        /// plus d'objet Process (ni de handle) ouvert à chaque appel. Un échec n'est pas mémorisé.</summary>
+        /// <summary>Nom du processus au premier plan, null si aucune fenêtre n'a le focus. Résolu à chaque appel (un clic
+        /// sur « Ajouter l'appli au premier plan ») : un cache par PID renverrait un nom périmé une fois le PID réattribué.</summary>
         public static string ForegroundProcessName()
         {
             try
             {
-                var h = GetForegroundWindow(); GetWindowThreadProcessId(h, out uint pid);
-                var c = _fg;
-                if (c != null && c.Pid == pid) return c.Name;
-                string name; using (var p = Process.GetProcessById((int)pid)) name = p.ProcessName;
-                _fg = new FgEntry(pid, name);
-                return name;
+                var h = GetForegroundWindow(); if (h == IntPtr.Zero) return null;
+                GetWindowThreadProcessId(h, out uint pid); if (pid == 0) return null;   // pas de fenêtre : jamais « Idle »
+                using (var p = Process.GetProcessById((int)pid)) return p.ProcessName;
             }
             catch { return null; }
         }
-        sealed class FgEntry { public readonly uint Pid; public readonly string Name; public FgEntry(uint pid, string name) { Pid = pid; Name = name; } }
-        static volatile FgEntry _fg;
         [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
         [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
 
@@ -463,6 +462,54 @@ namespace PerfMonitorLive
                     if (Settings.TelegramDigest && TelegramSender.Configured(Settings)) TelegramSender.Fire(Settings, "📋 " + title + "\n" + body);
                 }));
             });
+        }
+
+        // ---------------------------------------------------------------- rapport d'arrêt brutal
+        // Le banc (PERFMON_BENCH) ne vérifie pas, sauf --crash-check : il partage souvent le dossier data de l'instance
+        // installée et lui volerait la notification (l'arrêt serait marqué comme déjà notifié).
+        CrashEntry _lastCrash, _crashPending; CrashReportWindow _crashWin;
+        void CheckCrash()
+        {
+            try
+            {
+                var sw = Stopwatch.StartNew();
+                var last = CrashReport.Refresh(out var notify);
+                if (notify != null || sw.ElapsedMilliseconds > 500) Paths.Log("Vérification des arrêts inattendus en " + sw.ElapsedMilliseconds + " ms");
+                Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    _lastCrash = last; _tray.SetCrash(last?.When);
+                    if (notify != null) { _crashPending = notify; TryShowCrashToast(); }
+                }));
+            }
+            catch (Exception ex) { Paths.Log("crash: " + ex.Message); }
+        }
+        /// <summary>Notification persistante. Non critique : différée pendant un jeu ou une pause des notifications (SlowTick réessaie).</summary>
+        void TryShowCrashToast()
+        {
+            var c = _crashPending; if (c == null) return;
+            if (Settings.IsPaused || (Games.Active && !c.Critical)) return;
+            _crashPending = null;
+            var a = new AlertInfo
+            {
+                RuleId = "crash", Time = DateTime.Now, Severity = c.Critical ? Severity.Critical : Severity.Warning, Persistent = true,
+                Title = "Arrêt brutal détecté le " + c.When.ToString("dd/MM") + " à " + c.When.ToString("HH:mm"),
+                Detail = c.summary ?? "", Click = () => ShowCrashReport(c),
+            };
+            a.Actions.Add(new ToastAction { Label = "Voir le détail", Primary = true, Run = () => ShowCrashReport(c) });
+            Toasts.Show(a, true);
+            ThreadPool.QueueUserWorkItem(_ => CrashReport.MarkNotified(c));
+        }
+        public void ShowCrashReport(CrashEntry c)
+        {
+            if (c == null) return;
+            try
+            {
+                if (_crashWin != null && _crashWin.IsLoaded) { _crashWin.Close(); }
+                _crashWin = new CrashReportWindow(c);
+                _crashWin.Closed += (s, e) => { if (ReferenceEquals(s, _crashWin)) _crashWin = null; };
+                _crashWin.Show(); _crashWin.Activate();
+            }
+            catch (Exception ex) { Paths.Log("rapport d'arrêt: " + ex.Message); }
         }
 
         // ---------------------------------------------------------------- thème
@@ -531,14 +578,16 @@ namespace PerfMonitorLive
                 bool ok = true;   // _startupApplied n'est positionné qu'en cas de succès : un échec sera retenté au prochain appel
                 try
                 {
-                    if (_taskExists < 0) _taskExists = TaskExists() ? 1 : 0;
-                    bool exists = _taskExists == 1;
+                    // Valeur mise en cache au démarrage consommée une seule fois ; ensuite on relit l'état réel à chaque
+                    // application (rare, hors thread UI) : la tâche a pu être supprimée ou recréée de l'extérieur.
+                    int cached = _taskExists; _taskExists = -1;
+                    bool exists = cached >= 0 ? cached == 1 : TaskExists();
                     if (Hardware.IsElevated)
                     {
                         // La tâche planifiée est créée par install-live.ps1. L'application ne la (re)crée que si l'option est active ET qu'elle manque
                         // (jamais systématiquement au démarrage : un exe qui enregistre une tâche « highest » à chaque lancement est vu comme un logiciel de persistance par Defender).
-                        if (want && !exists) { if (Schtasks("/create /f /tn " + TaskName + " /sc onlogon /rl highest /it /tr \"\\\"" + Environment.ProcessPath + "\\\" --tray\"") == 0) _taskExists = 1; else ok = false; }
-                        else if (!want && exists) { if (Schtasks("/delete /f /tn " + TaskName) == 0) _taskExists = 0; else ok = false; }
+                        if (want && !exists) { if (Schtasks("/create /f /tn " + TaskName + " /sc onlogon /rl highest /it /tr \"\\\"" + Environment.ProcessPath + "\\\" --tray\"") != 0) ok = false; }
+                        else if (!want && exists) { if (Schtasks("/delete /f /tn " + TaskName) != 0 && TaskExists()) ok = false; }   // tâche déjà absente : l'état voulu est atteint
                         using (var k = Registry.CurrentUser.OpenSubKey(RunKey, true)) if (k != null && k.GetValue(RunName) != null) k.DeleteValue(RunName);
                     }
                     else if (!exists)
@@ -551,7 +600,8 @@ namespace PerfMonitorLive
                     }
                 }
                 catch (Exception ex) { ok = false; Paths.Log("Startup: " + ex.Message); }
-                if (ok) Volatile.Write(ref _startupApplied, want ? 1 : 0);
+                // échec : état appliqué inconnu, pour que la prochaine bascule (dans un sens ou dans l'autre) retente vraiment
+                Volatile.Write(ref _startupApplied, ok ? (want ? 1 : 0) : -1);
             }
         }
 
@@ -576,6 +626,12 @@ namespace PerfMonitorLive
                 Toasts.Show(new AlertInfo { RuleId = "report", Time = DateTime.Now, Severity = Severity.Warning, Title = "Rapport HTML indisponible", Detail = "Placer report.ps1 et template.html à côté de PerfMonitorLive.exe (dossier " + Paths.BaseDir + ")." }, true);
                 return;
             }
+            if (!Paths.ReportAvailable)   // banc isolé dans BaseDirench : report.ps1 lirait les vraies données de BaseDir\data
+            {
+                Paths.Log("Report : rapport indisponible en mode banc (report.ps1 lit " + System.IO.Path.Combine(Paths.BaseDir, "data") + ", données du banc dans " + Paths.DataDir + ")");
+                Toasts.Show(new AlertInfo { RuleId = "report", Time = DateTime.Now, Severity = Severity.Warning, Title = "Rapport HTML indisponible en mode banc", Detail = "report.ps1 lirait les données de l'instance installée, pas celles du banc (" + Paths.DataDir + ")." }, true);
+                return;
+            }
             try { Process.Start(new ProcessStartInfo("powershell.exe", "-NoProfile -ExecutionPolicy Bypass -File \"" + Paths.ReportScript + "\" -Hours 24") { WindowStyle = ProcessWindowStyle.Hidden, UseShellExecute = false, CreateNoWindow = true }); }
             catch (Exception ex) { Paths.Log("Report: " + ex.Message); }
         }
@@ -591,7 +647,7 @@ namespace PerfMonitorLive
         void Quit()
         {
             Games.ForceEnd();
-            _slow.Stop(); _sampler?.Dispose(); Toasts?.CloseAll(); try { _overlay?.Close(); _widget?.Close(); } catch { } _tray?.Dispose(); _main?.ForceClose();
+            _slow.Stop(); _sampler?.Dispose(); Toasts?.CloseAll(); try { _overlay?.Close(); _widget?.Close(); } catch { } _tray?.Dispose(); try { _crashWin?.Close(); } catch { } _main?.ForceClose();
             Shutdown();
         }
         protected override void OnExit(ExitEventArgs e) { _tray?.Dispose(); _mutex?.Dispose(); base.OnExit(e); }
