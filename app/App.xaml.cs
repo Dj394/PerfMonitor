@@ -84,6 +84,7 @@ namespace PerfMonitorLive
 
             _sampler = new Sampler();
             _sampler.Fps.TargetPid = () => Games.Active ? Games.Pid : 0;
+            Games.FrameTimes = _sampler.Fps.FrameTimes;   // vrai « 1 % low » de session (histogramme des temps d'image)
             // Journal alimentation branché sur le thread de mesure, pas sur l'interface : quand la machine est
             // saturée, le Dispatcher prend du retard — or c'est exactement là qu'on veut la trace des dernières secondes.
             _sampler.SampleReady += s => _power.OnSample(s);

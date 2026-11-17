@@ -80,9 +80,12 @@ namespace PerfMonitorLive.UI
 
         readonly Rule _rule; readonly Action _save;
         readonly double _fixedMax;
+        /// <summary>false : un pourcentage élevé n'est pas un danger en soi (charge GPU à fond en jeu, VRAM remplie par le jeu) ;
+        /// sans règle activée, la carte reste verte au lieu de la palette générique « ≥ 70 % ambre, ≥ 90 % rouge ».</summary>
+        readonly bool _highIsBad;
 
-        public MetricVm(string key, string title, string icon, Rule rule, Action save, double fixedMax = 0)
-        { Key = key; Title = title; Icon = icon; _rule = rule; _save = save; _fixedMax = fixedMax; }
+        public MetricVm(string key, string title, string icon, Rule rule, Action save, double fixedMax = 0, bool highIsBad = true)
+        { Key = key; Title = title; Icon = icon; _rule = rule; _save = save; _fixedMax = fixedMax; _highIsBad = highIsBad; }
 
         public string Key { get; }
         public string Title { get; }
@@ -161,7 +164,7 @@ namespace PerfMonitorLive.UI
                 double ratio = _last.Value / _rule.Threshold;
                 level = IsAlert || ratio >= 1 ? Palette.Bad : ratio >= 0.8 ? Palette.Warn : Palette.Good;
             }
-            else if (_last.HasValue && IsPercent) level = _last.Value >= 90 ? Palette.Bad : _last.Value >= 70 ? Palette.Warn : Palette.Good;
+            else if (_last.HasValue && IsPercent) level = IsAlert ? Palette.Bad : !_highIsBad ? Palette.Good : _last.Value >= 90 ? Palette.Bad : _last.Value >= 70 ? Palette.Warn : Palette.Good;
             LevelBrush = Palette.B(level); LevelSoft = Palette.B(level, 0x2E);
             CardBorder = IsAlert ? Palette.B(Palette.Bad, 0xAA) : Palette.B(Palette.Grid);
             double gw = IsPercent && _last.HasValue ? Math.Max(0, Math.Min(1, _last.Value / 100)) * W : 0;

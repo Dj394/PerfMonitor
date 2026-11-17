@@ -96,6 +96,8 @@ namespace PerfMonitorLive.Metrics
         [JsonIgnore] public bool GameActive { get; set; }
         /// <summary>Saccades comptées depuis le lancement (voir <see cref="FpsMeter.StutterTotal"/>) : sert au rapport de session.</summary>
         [JsonIgnore] public long StutterTotal { get; set; }
+        /// <summary>Mémoire vidéo totale (Go) quand elle est connue : affichée telle quelle, et non recalculée depuis vram et vramPct arrondis.</summary>
+        [JsonIgnore] public double? VramTotal { get; set; }
 
         static readonly JsonSerializerOptions Opts = new JsonSerializerOptions { DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull };
         public string ToJson() => JsonSerializer.Serialize(this, Opts);

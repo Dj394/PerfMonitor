@@ -135,6 +135,66 @@ namespace PerfMonitorLive.Tests
         }
 
         [Fact]
+        public void Gel_de_2_5_s_compte_comme_saccade_a_la_reprise()
+        {
+            // 1 s à 10 ms, gel de 2,5 s, reprise à 10 ms ; lectures toutes les secondes (horloge du lecteur = horodatages)
+            var w = new FrameWindow(); w.Reset(1);
+            double t0 = Series(w, 1, 0, Gaps(100, 10));                  // dernière image avant le gel : 1000
+            Assert.Equal(0, w.Stats(1000, W, Stale).Stutters);
+            Assert.Equal(0, w.Stats(2000, W, Stale).Stutters);             // 1 s sans image : simple retard de livraison possible
+            var gel = w.Stats(3000, W, Stale);                             // 2 s sans image : gel en cours
+            Assert.Equal(0, gel.Low1);                                      // 1 % low ramené au temps d'image en cours (2 s)
+            Assert.Equal(1, gel.Stutters);
+            Assert.Equal(0, w.StutterTotal);                                // compté une seule fois, à la reprise
+            double last = Series(w, 1, t0 + 2500, Gaps(100, 10));          // reprise à 3500, jusqu'à 4500
+            var st = w.Stats(4500, W, Stale);                              // fenêtre [2500, 4500] : le gel commence avant elle
+            Assert.Equal(1, st.Stutters);
+            Assert.Equal(1, w.StutterTotal);
+            Assert.Equal(100, st.Fps);                                      // débit et temps moyen : fenêtre seule
+            Assert.Equal(10, st.FrameMs);
+            Assert.Equal(1, w.Stats(5000, W, Stale).Stutters);              // relue : pas recomptée
+            Assert.Equal(1, w.StutterTotal);
+            Assert.True(Count(w.FrameTimes, 2500));                         // l'intervalle de 2,5 s est dans l'histogramme (débordement)
+        }
+
+        static bool Count(FrameTimeHistogram h, double ms)
+        {
+            var c = new long[FrameTimeHistogram.Bins]; h.CopyTo(c);
+            int i = ms >= FrameTimeHistogram.MaxMs ? FrameTimeHistogram.Bins - 1 : (int)(ms / FrameTimeHistogram.BinMs);
+            return c[i] > 0;
+        }
+
+        [Fact]
+        public void Histogramme_compte_chaque_image_une_seule_fois()
+        {
+            var w = new FrameWindow(); w.Reset(1);
+            double last = Series(w, 1, 0, Gaps(150, 10, (40, 50)));
+            w.Stats(last, W, Stale); w.Stats(last + 500, W, Stale);
+            var c = new long[FrameTimeHistogram.Bins]; w.FrameTimes.CopyTo(c);
+            long total = 0; foreach (var x in c) total += x;
+            Assert.Equal(150, total);
+            Assert.InRange(FrameTimeHistogram.Percentile(c, null, 0.999).Value, 49.9, 50.2);
+            Assert.InRange(FrameTimeHistogram.Percentile(c, null, 0.99).Value, 9.9, 10.2);
+        }
+
+        [Fact]
+        public void Low_de_session_est_le_centile_de_toutes_les_images()
+        {
+            // 10 % du temps à 30 FPS, 90 % à 120 FPS : ~2,7 % des images à 33 ms → vrai 1 % low ~30, pas la moyenne des fenêtres (~111)
+            var h = new FrameTimeHistogram();
+            GameSession saved = null;
+            var d = new GameDetector(new Settings()) { Log = _ => { }, Save = s => saved = s, FrameTimes = h };
+            var t = new DateTime(2026, 1, 1, 20, 0, 0);
+            for (int i = 0; i < 500; i++) h.Add(5);                         // avant la session : ignorées
+            for (int s = 0; s <= 8; s += 2) d.Step("GameA", 10, t.AddSeconds(s), new Sample { fps = 120, fps1 = 115 });
+            for (int i = 0; i < 6 * 30; i++) h.Add(1000.0 / 30);
+            for (int i = 0; i < 54 * 120; i++) h.Add(1000.0 / 120);
+            d.Step("GameA", 10, t.AddSeconds(10), new Sample { fps = 120, fps1 = 115 });
+            d.ForceEnd();
+            Assert.Equal(30, saved.fps1);
+        }
+
+        [Fact]
         public void Session_sans_fps_et_anciennes_lignes_restent_lisibles()
         {
             GameSession saved = null;

@@ -206,6 +206,9 @@ namespace PerfMonitorLive.Metrics
         /// <summary>Saccades comptées depuis le lancement, chacune une seule fois (jamais remis à zéro, tous jeux confondus) :
         /// la différence entre deux lectures donne les saccades de l'intervalle, même si des mesures ont été sautées.</summary>
         public long StutterTotal => _window.StutterTotal;
+        /// <summary>Histogramme cumulé des temps d'image depuis le lancement (même principe que <see cref="StutterTotal"/>) :
+        /// le rapport de session en tire le vrai « 1 % low » de la session.</summary>
+        public FrameTimeHistogram FrameTimes => _window.FrameTimes;
 
         double? Publish(FrameStats st)
         {
@@ -244,8 +247,19 @@ namespace PerfMonitorLive.Metrics
         double _stutterMark = double.NegativeInfinity;       // sous _lock : fin de la dernière image déjà examinée pour le total des saccades
         double[] _work;                                      // lecteur seul : [0, cap) horodatages triés, [cap, 2 cap) temps d'image triés
         long _stutterTotal;
+        /// <summary>Au-delà de ce délai sans nouvelle image (horloge du lecteur), le jeu est considéré figé : le 1 % low publié
+        /// est dégradé au temps d'image en cours. Doit dépasser la latence normale de livraison ETW (vidage ~1 fois/s) et la
+        /// cadence de mesure, sinon un simple lot en retard passerait pour un gel.</summary>
+        public const double StallMs = 1500;
+        /// <summary>Plus long intervalle à cheval sur le début de la fenêtre encore examiné (gel, compilation de shader…) ;
+        /// au-delà (écran de chargement sans image, jeu en pause), ce n'est plus une saccade.</summary>
+        public const double MaxGapMs = 10_000;
 
         public FrameWindow(int capacity = 8192) { _ts = new double[capacity]; }
+
+        /// <summary>Histogramme cumulé des temps d'image (chaque intervalle compté une seule fois, jamais remis à zéro) :
+        /// sert au vrai « 1 % low » d'une session de jeu (différence entre la fin et le début de la session).</summary>
+        public FrameTimeHistogram FrameTimes { get; } = new FrameTimeHistogram();
 
         /// <summary>Saccades comptées depuis la création, chacune une seule fois (voir <see cref="FpsMeter.StutterTotal"/>).</summary>
         public long StutterTotal => Interlocked.Read(ref _stutterTotal);
@@ -276,56 +290,111 @@ namespace PerfMonitorLive.Metrics
         /// plus de <paramref name="staleMs"/>, tout est null. Tout est null aussi avec moins de 2 images.
         /// Sur la même fenêtre : temps d'image moyen, « 1 % low » (FPS du 99e centile des temps d'image, rang le plus
         /// proche) et nombre de saccades (temps &gt; <see cref="StutterFactor"/> × médiane). Les saccades des images
-        /// terminées depuis la lecture précédente s'ajoutent à <see cref="StutterTotal"/>.</summary>
+        /// terminées depuis la lecture précédente s'ajoutent à <see cref="StutterTotal"/> et à <see cref="FrameTimes"/>.
+        /// L'intervalle à cheval sur le début de la fenêtre (dernière image avant la fenêtre → première image de la
+        /// fenêtre) est examiné lui aussi pour le centile et les saccades : sans lui, un gel de plus de ~1 s n'était
+        /// jamais vu, la fenêtre se terminant à la dernière image reçue. Débit et temps moyen restent ceux de la fenêtre.
+        /// Pendant un gel (aucune nouvelle image depuis plus de <see cref="StallMs"/>), le 1 % low est ramené au temps
+        /// d'image en cours et le gel compte comme une saccade de la fenêtre (le total ne le compte qu'à la reprise).</summary>
         public FrameStats Stats(double nowMs, double windowMs, double staleMs)
         {
             int n = 0, cap = _ts.Length;
-            double mark;
+            double mark, pending;
+            bool hasPrev = false;
             lock (_lock)
             {
                 if (_count == 0) return default;
                 double last = double.NegativeInfinity;
                 for (int i = 0; i < _count; i++) { double t = _ts[i]; if (t > last) last = t; }
                 if (last > _seenTs) { _seenTs = last; _seenAt = nowMs; }
-                if (nowMs - _seenAt > staleMs) return default;   // plus d'image : jeu fermé, masqué, figé ou non mesurable
+                pending = nowMs - _seenAt;
+                if (pending > staleMs) return default;   // plus d'image : jeu fermé, masqué, figé ou non mesurable
 
-                double from = last - windowMs;
+                double from = last - windowMs, prev = double.NegativeInfinity;
                 _work ??= new double[cap * 2];
-                for (int i = 0; i < _count; i++) { double t = _ts[i]; if (t >= from) _work[n++] = t; }
+                for (int i = 0; i < _count; i++) { double t = _ts[i]; if (t >= from) _work[n++] = t; else if (t > prev) prev = t; }
+                if (prev >= from - MaxGapMs) { _work[n++] = prev; hasPrev = true; }   // n ≤ _count ≤ cap : prev est l'une des images
                 mark = _stutterMark;
             }
 
             var ts = _work.AsSpan(0, n);
             ts.Sort();   // tri en place : le tampon est circulaire et les lots ETW ne garantissent pas l'ordre
-            if (n < 2) return default;
-            double span = ts[n - 1] - ts[0];
+            int w0 = hasPrev ? 1 : 0;   // ts[w0..n) : images de la fenêtre proprement dite ; ts[0] = celle d'avant, si présente
+            if (n - w0 < 2) return default;
+            double span = ts[n - 1] - ts[w0];
             if (span < 100) return default;
 
-            int m = n - 1;
+            int m = n - 1, mw = n - 1 - w0;
             var dt = _work.AsSpan(cap, m);
             for (int i = 0; i < m; i++) dt[i] = ts[i + 1] - ts[i];
             dt.Sort();
             double median = (m & 1) == 1 ? dt[m / 2] : (dt[m / 2 - 1] + dt[m / 2]) / 2;
             double p99 = dt[Math.Max(0, (int)Math.Ceiling(0.99 * m) - 1)];
+            double limit = median > 0 ? StutterFactor * median : double.PositiveInfinity;
 
-            int stutters = 0; long fresh = 0;
-            if (median > 0)
+            int stutters = 0;
+            for (int i = 0; i < m; i++) if (ts[i + 1] - ts[i] > limit) stutters++;
+
+            // Images terminées après la lecture précédente : pas encore comptées (total des saccades, histogramme de session).
+            // Reset entre la copie et ici (changement de jeu) : la fenêtre copiée n'est plus d'actualité, rien n'est ajouté.
+            bool current;
+            lock (_lock) { current = _stutterMark.Equals(mark); if (current) _stutterMark = Math.Max(mark, ts[n - 1]); }
+            if (current)
             {
-                double limit = StutterFactor * median;
-                for (int i = 0; i < m; i++)
+                long fresh = 0;
+                for (int i = m - 1; i >= 0 && ts[i + 1] > mark; i--)
                 {
-                    if (ts[i + 1] - ts[i] <= limit) continue;
-                    stutters++;
-                    if (ts[i + 1] > mark) fresh++;   // image terminée après la lecture précédente : pas encore comptée
+                    double d = ts[i + 1] - ts[i];
+                    FrameTimes.Add(d);
+                    if (d > limit) fresh++;
                 }
+                if (fresh > 0) Interlocked.Add(ref _stutterTotal, fresh);
             }
-            // Reset entre la copie et ici (changement de jeu) : la fenêtre copiée n'est plus d'actualité, rien n'est ajouté
-            lock (_lock) { if (_stutterMark.Equals(mark)) _stutterMark = Math.Max(mark, ts[n - 1]); else fresh = 0; }
-            if (fresh > 0) Interlocked.Add(ref _stutterTotal, fresh);
 
-            double fps = Math.Round(m * 1000.0 / span);
+            double fps = Math.Round(mw * 1000.0 / span);
             double low1 = p99 > 0 ? Math.Round(1000.0 / p99) : fps;
-            return new FrameStats(fps, low1, Math.Round(span / m, 2), stutters);
+            if (pending > StallMs && pending > limit)
+            {   // gel en cours : l'image attendue dure déjà au moins « pending » (sous-estimé : la dernière image a été vue après coup)
+                low1 = Math.Min(low1, Math.Round(1000.0 / pending));
+                stutters++;
+            }
+            return new FrameStats(fps, low1, Math.Round(span / mw, 2), stutters);
+        }
+    }
+
+    /// <summary>Histogramme cumulé des temps d'image, par cases de <see cref="BinMs"/> ms jusqu'à <see cref="MaxMs"/> ms,
+    /// plus une case de débordement. Tableau préalloué, écrit par le thread de mesure (Interlocked), lu par le thread UI
+    /// au début et à la fin d'une session de jeu : le centile de la session se lit sur la différence des deux copies.</summary>
+    public sealed class FrameTimeHistogram
+    {
+        public const double BinMs = 0.1, MaxMs = 100;
+        public const int Bins = (int)(MaxMs / BinMs) + 1;   // dernière case : au-delà de MaxMs
+        readonly long[] _c = new long[Bins];
+
+        public void Add(double ms)
+        {
+            if (!(ms >= 0)) return;
+            int i = ms >= MaxMs ? Bins - 1 : (int)(ms / BinMs);
+            Interlocked.Increment(ref _c[i]);
+        }
+
+        /// <summary>Copie les compteurs dans <paramref name="dst"/> (longueur <see cref="Bins"/>).</summary>
+        public void CopyTo(long[] dst) { for (int i = 0; i < Bins; i++) dst[i] = Interlocked.Read(ref _c[i]); }
+
+        /// <summary>Temps d'image (ms) du centile <paramref name="q"/> (rang le plus proche) des images comptées entre deux
+        /// copies ; null si aucune. Centre de la case ; la case de débordement vaut <see cref="MaxMs"/>.</summary>
+        public static double? Percentile(long[] end, long[] start, double q)
+        {
+            long total = 0;
+            for (int i = 0; i < Bins; i++) total += end[i] - (start?[i] ?? 0);
+            if (total <= 0) return null;
+            long rank = Math.Max(1, (long)Math.Ceiling(q * total)), acc = 0;
+            for (int i = 0; i < Bins; i++)
+            {
+                acc += end[i] - (start?[i] ?? 0);
+                if (acc >= rank) return i == Bins - 1 ? MaxMs : (i + 0.5) * BinMs;
+            }
+            return MaxMs;
         }
     }
 }

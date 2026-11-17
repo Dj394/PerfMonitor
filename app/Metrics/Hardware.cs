@@ -85,7 +85,7 @@ namespace PerfMonitorLive.Metrics
                     case SensorType.Clock: if (isGpu) SawGpuClock = true; else if (isCpu) SawCpuClock = true; break;
                     case SensorType.Power: if (isGpu) SawGpuPower = true; else if (isCpu) SawCpuPower = true; break;
                     case SensorType.Load: if (isGpu && Array.IndexOf(GpuLoadNames, s.Name) >= 0) SawGpuLoad = true; break;
-                    case SensorType.SmallData: if (isGpu && Array.IndexOf(VramUsedNames, s.Name) >= 0) SawVram = true; break;
+                    case SensorType.SmallData: if (isGpu && GpuRank(h) >= 1 && Array.IndexOf(VramUsedNames, s.Name) >= 0) SawVram = true; break;   // pas de VRAM pour un intégré
                 }
             }
         }
@@ -93,7 +93,7 @@ namespace PerfMonitorLive.Metrics
         public class Reading
         {
             public double? Cpu, Gpu, CpuMHz, GpuMHz, CpuW, GpuW;
-            public double? GpuLoad, VramGB, VramPct, CpuCoreMax;
+            public double? GpuLoad, VramGB, VramPct, VramTotalGB, CpuCoreMax;
             public double? V12, V5, V33;
             public List<VoltSample> Volts = new List<VoltSample>();
             public List<FanSample> Fans = new List<FanSample>();
@@ -264,10 +264,13 @@ namespace PerfMonitorLive.Metrics
         /// <summary>Charge GPU et VRAM du GPU suivi, lues sur les capteurs que <c>h.Update()</c> vient de rafraîchir (aucune
         /// lecture supplémentaire, aucune allocation). Total VRAM : capteur du pilote, sinon utilisée + libre, sinon l'inventaire
         /// (carte dédiée seulement : la « mémoire dédiée » d'un GPU intégré n'est qu'une petite réserve, un pourcentage
-        /// calculé dessus ne voudrait rien dire).</summary>
+        /// calculé dessus ne voudrait rien dire). Aucune VRAM n'est publiée pour un GPU intégré (Intel iGPU, APU AMD) :
+        /// sa « mémoire dédiée » (petite réserve, ou carve-out UMA collé à 100 %) ne reflète pas la mémoire partagée
+        /// qu'utilise réellement le jeu.</summary>
         void ReadGpuLoadVram(IHardware h, Reading r)
         {
             r.GpuLoad = Pick(h, SensorType.Load, GpuLoadNames, zeroOk: true);
+            if (GpuRank(h) == 0) return;
             var used = Pick(h, SensorType.SmallData, VramUsedNames);
             if (!used.HasValue) return;
             double? total = Pick(h, SensorType.SmallData, VramTotalNames);
@@ -279,6 +282,7 @@ namespace PerfMonitorLive.Metrics
             }
             r.VramGB = Math.Round(used.Value / 1024, 2);
             r.VramPct = VramPercent(used.Value, total);
+            if (r.VramPct.HasValue) r.VramTotalGB = Math.Round(total.Value / 1024, 1);   // total exact, pas reconstruit depuis des valeurs arrondies
         }
         /// <summary>% de VRAM utilisée ; null si le total est inconnu ou incohérent (utilisée nettement au-delà du total).</summary>
         internal static double? VramPercent(double usedMB, double? totalMB)

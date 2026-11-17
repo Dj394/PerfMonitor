@@ -551,7 +551,7 @@ namespace PerfMonitorLive.Metrics
             var r = _sensors ?? new Hardware.Reading();
             Lap(4);
             s.temp = r.Cpu; s.gpu = r.Gpu; s.cpuMHz = r.CpuMHz; s.gpuMHz = r.GpuMHz; s.cpuW = r.CpuW; s.gpuW = r.GpuW;
-            s.gpuLoad = r.GpuLoad; s.vram = r.VramGB; s.vramPct = r.VramPct; s.cpuCore = r.CpuCoreMax;
+            s.gpuLoad = r.GpuLoad; s.vram = r.VramGB; s.vramPct = r.VramPct; s.VramTotal = r.VramTotalGB; s.cpuCore = r.CpuCoreMax;
             s.fans = r.Fans; s.stor = r.Storage;
             s.v12 = r.V12; s.v5 = r.V5; s.v33 = r.V33; s.volts = r.Volts;
             if (!Hw.Available && _tempAvailable)   // repli ACPI, lu par le thread des capteurs
