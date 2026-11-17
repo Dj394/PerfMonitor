@@ -78,6 +78,9 @@ namespace PerfMonitorLive.Metrics
         public double? vram { get; set; }     // mémoire vidéo utilisée, Go
         public double? vramPct { get; set; }  // % de la mémoire vidéo totale (null si le total est inconnu)
         public double? cpuCore { get; set; }  // % de charge du cœur CPU le plus chargé (indice limité CPU / GPU)
+        public double? fps1 { get; set; }     // « 1 % low » : FPS du 99e centile des temps d'image (fenêtre de 2 s)
+        public double? fpsMs { get; set; }    // temps d'image moyen (ms)
+        public int? sacc { get; set; }        // saccades dans la fenêtre de 2 s (image > 2,5 × la médiane)
         public List<FanSample> fans { get; set; } = new List<FanSample>();
         public List<StorSample> stor { get; set; } = new List<StorSample>();
         public double? v12 { get; set; }      // rail +12 V (alimentation du CPU et de la carte graphique)
@@ -91,6 +94,8 @@ namespace PerfMonitorLive.Metrics
         [JsonIgnore] public double TotalMB { get; set; }
         [JsonIgnore] public List<LeakInfo> Leaks { get; set; }
         [JsonIgnore] public bool GameActive { get; set; }
+        /// <summary>Saccades comptées depuis le lancement (voir <see cref="FpsMeter.StutterTotal"/>) : sert au rapport de session.</summary>
+        [JsonIgnore] public long StutterTotal { get; set; }
 
         static readonly JsonSerializerOptions Opts = new JsonSerializerOptions { DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull };
         public string ToJson() => JsonSerializer.Serialize(this, Opts);

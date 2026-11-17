@@ -52,6 +52,9 @@ namespace PerfMonitorLive.UI
             long k = LiveText.Key(s.fps);
             if (k != _fpsK) { _fpsK = k; FpsText.Text = k == LiveText.None ? "" : s.fps.Value.ToString("0") + " FPS"; }
             LiveText.SetBrush(FpsText, Palette.B(!s.fps.HasValue ? Palette.Good : s.fps < 30 ? Palette.Bad : s.fps < 60 ? Palette.Warn : Palette.Good), ref _fpsB);
+            // 1 % low : à côté des FPS, discret ; vide quand les FPS le sont
+            k = s.fps.HasValue ? LiveText.Key(s.fps1) : LiveText.None;
+            if (k != _fps1K) { _fps1K = k; Fps1Text.Text = k == LiveText.None ? "" : "1 % low " + s.fps1.Value.ToString("0"); }
 
             double cr = Math.Round(s.cpu);
             if (cr != _cpuR) { _cpuR = cr; CpuText.Text = "CPU " + cr + " %"; }
@@ -85,7 +88,7 @@ namespace PerfMonitorLive.UI
             int hm = s.Time.Hour * 60 + s.Time.Minute;
             if (hm != _clockK) { _clockK = hm; ClockText.Text = s.Time.ToString("HH:mm"); }
         }
-        long _fpsK = long.MaxValue, _tempK = long.MaxValue, _gpuK = long.MaxValue, _gpuMHzK = long.MaxValue, _gpuLoadK = long.MaxValue;
+        long _fpsK = long.MaxValue, _fps1K = long.MaxValue, _tempK = long.MaxValue, _gpuK = long.MaxValue, _gpuMHzK = long.MaxValue, _gpuLoadK = long.MaxValue;
         double _cpuR = double.NaN, _memR = double.NaN;
         Brush _fpsB, _cpuB, _tempB, _gpuB, _memB;
         string _diskN; int _diskP = int.MaxValue; int _clockK = -1;

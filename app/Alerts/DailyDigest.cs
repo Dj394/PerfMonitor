@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using PerfMonitorLive.Metrics;
 
 namespace PerfMonitorLive.Alerts
@@ -12,6 +13,13 @@ namespace PerfMonitorLive.Alerts
     {
         public string ts { get; set; } public string game { get; set; } public double min { get; set; }
         public double cpuAvg { get; set; } public double cpuMax { get; set; } public double tempMax { get; set; } public double gpuMax { get; set; } public double memMax { get; set; }
+        // Images par seconde (absents des anciennes lignes et des sessions sans mesure FPS) : moyenne des FPS mesurés,
+        // moyenne des « 1 % low » de chaque fenêtre de 2 s, saccades comptées une à une sur toute la session.
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public double? fpsAvg { get; set; }
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public double? fps1 { get; set; }
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public long? sacc { get; set; }
+        /// <summary>« 92 FPS moy · 1 % low 61 · 3 saccades », ou null sans mesure FPS.</summary>
+        [JsonIgnore] public string FpsText => fpsAvg.HasValue ? fpsAvg.Value.ToString("0") + " FPS moy" + (fps1.HasValue ? " · 1 % low " + fps1.Value.ToString("0") : "") + (sacc.HasValue ? " · " + sacc.Value + (sacc.Value > 1 ? " saccades" : " saccade") : "") : null;
         public DateTime Time => DateTime.TryParse(ts, out var t) ? t : DateTime.MinValue;
         /// <summary>Charge GPU moyenne (%) et indice de goulot (voir <see cref="Bottleneck.Verdict"/>) ; absents des sessions
         /// enregistrées avant leur ajout, ou sans capteur de charge GPU.</summary>

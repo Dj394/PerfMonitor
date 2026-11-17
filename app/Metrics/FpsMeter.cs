@@ -173,7 +173,7 @@ namespace PerfMonitorLive.Metrics
         /// pour ce PID (moins de 2 images, ou plus de 3 s sans nouvelle image). Lecture sans effet de bord sur la mesure.</summary>
         public double? Read()
         {
-            if (!Available) return null;
+            if (!Available) return Publish(default);
             int pid = 0;
             try { pid = TargetPid(); } catch { }
             var now = DateTime.UtcNow;
@@ -183,7 +183,7 @@ namespace PerfMonitorLive.Metrics
                 _target = -1;
                 if (_lastPid != 0) { _lastPid = 0; _window.Reset(-1); }
                 if (_thread != null && now - _lastWanted > CloseAfter) StopSession();
-                return null;
+                return Publish(default);
             }
             _lastWanted = now;
             // changement de jeu : on repart d'une fenêtre vide, attribuée au nouveau PID (une image de l'ancien PID
@@ -192,8 +192,25 @@ namespace PerfMonitorLive.Metrics
             _target = pid;
             // session en cours d'ouverture (ou à rouvrir) : les horodatages ETW sont relatifs au début de la session,
             // la fenêtre sera donc vidée à la première lecture sur la session vivante (_lastPid = 0)
-            if (!_live) { EnsureSession(now); _lastPid = 0; return null; }
-            return _window.Rate(Environment.TickCount64, WindowMs, StaleMs);
+            if (!_live) { EnsureSession(now); _lastPid = 0; return Publish(default); }
+            return Publish(_window.Stats(Environment.TickCount64, WindowMs, StaleMs));
+        }
+
+        /// <summary>Détail de la dernière lecture (thread de mesure), sur la même fenêtre de 2 s que le débit ; null quand
+        /// <see cref="Read"/> renvoie null. <see cref="Low1"/> = « 1 % low » : FPS correspondant au 99e centile des temps
+        /// d'image ; <see cref="FrameMs"/> = temps d'image moyen ; <see cref="Stutters"/> = saccades (images plus de
+        /// <see cref="FrameWindow.StutterFactor"/> fois plus longues que la médiane) présentes dans la fenêtre.</summary>
+        public double? Low1 { get; private set; }
+        public double? FrameMs { get; private set; }
+        public int? Stutters { get; private set; }
+        /// <summary>Saccades comptées depuis le lancement, chacune une seule fois (jamais remis à zéro, tous jeux confondus) :
+        /// la différence entre deux lectures donne les saccades de l'intervalle, même si des mesures ont été sautées.</summary>
+        public long StutterTotal => _window.StutterTotal;
+
+        double? Publish(FrameStats st)
+        {
+            Low1 = st.Low1; FrameMs = st.FrameMs; Stutters = st.Stutters;
+            return st.Fps;
         }
 
         public void Dispose()
@@ -203,21 +220,40 @@ namespace PerfMonitorLive.Metrics
         }
     }
 
+    /// <summary>Résultat d'une lecture de <see cref="FrameWindow"/> (structure : aucune allocation).
+    /// Tous les champs sont null quand le débit l'est.</summary>
+    internal readonly struct FrameStats
+    {
+        public readonly double? Fps, Low1, FrameMs; public readonly int? Stutters;
+        public FrameStats(double fps, double low1, double frameMs, int stutters) { Fps = fps; Low1 = low1; FrameMs = frameMs; Stutters = stutters; }
+    }
+
     /// <summary>Horodatages (ms) des dernières images d'un processus, dans un tampon circulaire préalloué.
-    /// Écrit par le thread ETW, lu par le thread de mesure : un verrou court, aucune allocation après construction.</summary>
+    /// Écrit par le thread ETW, lu par le thread de mesure : un verrou court, aucune allocation après construction
+    /// (le tampon de calcul des centiles est alloué une seule fois, à la première lecture qui trouve des images).
+    /// Le verrou ne couvre que la copie des horodatages : tris et centiles se font hors verrou, sur le thread de mesure,
+    /// une fois par mesure — rien n'est calculé image par image.</summary>
     internal sealed class FrameWindow
     {
+        /// <summary>Une image est une saccade si son temps dépasse ce multiple de la médiane de la fenêtre.</summary>
+        public const double StutterFactor = 2.5;
         readonly double[] _ts;
         readonly object _lock = new object();
         int _pid = -1, _head, _count;
-        double _seenTs = double.NegativeInfinity, _seenAt;   // dernier horodatage d'image constaté par Rate, et quand (horloge du lecteur)
+        double _seenTs = double.NegativeInfinity, _seenAt;   // dernier horodatage d'image constaté par Stats, et quand (horloge du lecteur)
+        double _stutterMark = double.NegativeInfinity;       // sous _lock : fin de la dernière image déjà examinée pour le total des saccades
+        double[] _work;                                      // lecteur seul : [0, cap) horodatages triés, [cap, 2 cap) temps d'image triés
+        long _stutterTotal;
 
         public FrameWindow(int capacity = 8192) { _ts = new double[capacity]; }
+
+        /// <summary>Saccades comptées depuis la création, chacune une seule fois (voir <see cref="FpsMeter.StutterTotal"/>).</summary>
+        public long StutterTotal => Interlocked.Read(ref _stutterTotal);
 
         /// <summary>Vide la fenêtre et n'accepte plus que les images de <paramref name="pid"/>.</summary>
         public void Reset(int pid)
         {
-            lock (_lock) { _pid = pid; _head = 0; _count = 0; _seenTs = double.NegativeInfinity; }
+            lock (_lock) { _pid = pid; _head = 0; _count = 0; _seenTs = double.NegativeInfinity; _stutterMark = double.NegativeInfinity; }
         }
 
         public void Add(int pid, double tsMs)
@@ -231,26 +267,65 @@ namespace PerfMonitorLive.Metrics
             }
         }
 
+        /// <summary>Débit seul (voir <see cref="Stats"/>).</summary>
+        public double? Rate(double nowMs, double windowMs, double staleMs) => Stats(nowMs, windowMs, staleMs).Fps;
+
         /// <summary>Débit sur les <paramref name="windowMs"/> dernières millisecondes d'images, la fenêtre se terminant
         /// à la dernière image reçue (et non à l'instant présent, les images arrivant par lots).
         /// <paramref name="nowMs"/> est l'horloge monotone du lecteur : si aucune nouvelle image n'est apparue depuis
-        /// plus de <paramref name="staleMs"/>, renvoie null. Renvoie aussi null avec moins de 2 images.</summary>
-        public double? Rate(double nowMs, double windowMs, double staleMs)
+        /// plus de <paramref name="staleMs"/>, tout est null. Tout est null aussi avec moins de 2 images.
+        /// Sur la même fenêtre : temps d'image moyen, « 1 % low » (FPS du 99e centile des temps d'image, rang le plus
+        /// proche) et nombre de saccades (temps &gt; <see cref="StutterFactor"/> × médiane). Les saccades des images
+        /// terminées depuis la lecture précédente s'ajoutent à <see cref="StutterTotal"/>.</summary>
+        public FrameStats Stats(double nowMs, double windowMs, double staleMs)
         {
+            int n = 0, cap = _ts.Length;
+            double mark;
             lock (_lock)
             {
-                if (_count == 0) return null;
+                if (_count == 0) return default;
                 double last = double.NegativeInfinity;
                 for (int i = 0; i < _count; i++) { double t = _ts[i]; if (t > last) last = t; }
                 if (last > _seenTs) { _seenTs = last; _seenAt = nowMs; }
-                if (nowMs - _seenAt > staleMs) return null;   // plus d'image : jeu fermé, masqué, figé ou non mesurable
+                if (nowMs - _seenAt > staleMs) return default;   // plus d'image : jeu fermé, masqué, figé ou non mesurable
 
-                double from = last - windowMs, first = last; int n = 0;
-                for (int i = 0; i < _count; i++) { double t = _ts[i]; if (t >= from) { n++; if (t < first) first = t; } }
-                double span = last - first;
-                if (n < 2 || span < 100) return null;
-                return Math.Round((n - 1) * 1000.0 / span);
+                double from = last - windowMs;
+                _work ??= new double[cap * 2];
+                for (int i = 0; i < _count; i++) { double t = _ts[i]; if (t >= from) _work[n++] = t; }
+                mark = _stutterMark;
             }
+
+            var ts = _work.AsSpan(0, n);
+            ts.Sort();   // tri en place : le tampon est circulaire et les lots ETW ne garantissent pas l'ordre
+            if (n < 2) return default;
+            double span = ts[n - 1] - ts[0];
+            if (span < 100) return default;
+
+            int m = n - 1;
+            var dt = _work.AsSpan(cap, m);
+            for (int i = 0; i < m; i++) dt[i] = ts[i + 1] - ts[i];
+            dt.Sort();
+            double median = (m & 1) == 1 ? dt[m / 2] : (dt[m / 2 - 1] + dt[m / 2]) / 2;
+            double p99 = dt[Math.Max(0, (int)Math.Ceiling(0.99 * m) - 1)];
+
+            int stutters = 0; long fresh = 0;
+            if (median > 0)
+            {
+                double limit = StutterFactor * median;
+                for (int i = 0; i < m; i++)
+                {
+                    if (ts[i + 1] - ts[i] <= limit) continue;
+                    stutters++;
+                    if (ts[i + 1] > mark) fresh++;   // image terminée après la lecture précédente : pas encore comptée
+                }
+            }
+            // Reset entre la copie et ici (changement de jeu) : la fenêtre copiée n'est plus d'actualité, rien n'est ajouté
+            lock (_lock) { if (_stutterMark.Equals(mark)) _stutterMark = Math.Max(mark, ts[n - 1]); else fresh = 0; }
+            if (fresh > 0) Interlocked.Add(ref _stutterTotal, fresh);
+
+            double fps = Math.Round(m * 1000.0 / span);
+            double low1 = p99 > 0 ? Math.Round(1000.0 / p99) : fps;
+            return new FrameStats(fps, low1, Math.Round(span / m, 2), stutters);
         }
     }
 }

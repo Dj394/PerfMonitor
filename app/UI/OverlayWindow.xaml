@@ -15,7 +15,8 @@
         <Border BorderThickness="1,0,1,1" Padding="16,8">
         <StackPanel Orientation="Horizontal">
             <TextBlock x:Name="GameText" Text="🎮 Jeu" Foreground="#8C97A8" Margin="0,0,16,0" VerticalAlignment="Center" FontWeight="SemiBold"/>
-            <TextBlock x:Name="FpsText" Foreground="#E8ECF2" Margin="0,0,16,0" VerticalAlignment="Center" FontSize="16" FontWeight="Bold"/>
+            <TextBlock x:Name="FpsText" Foreground="#E8ECF2" Margin="0,0,8,0" VerticalAlignment="Center" FontSize="16" FontWeight="Bold"/>
+            <TextBlock x:Name="Fps1Text" Foreground="#8C97A8" Margin="0,0,16,0" VerticalAlignment="Center"/>
             <TextBlock x:Name="CpuText" Foreground="#E8ECF2" Margin="0,0,14,0" VerticalAlignment="Center"/>
             <TextBlock x:Name="TempText" Foreground="#E8ECF2" Margin="0,0,14,0" VerticalAlignment="Center"/>
             <TextBlock x:Name="GpuText" Foreground="#E8ECF2" Margin="0,0,14,0" VerticalAlignment="Center"/>

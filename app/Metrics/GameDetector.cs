@@ -27,6 +27,7 @@ namespace PerfMonitorLive.Metrics
         // stats de session
         int _n; double _cpuSum, _cpuMax, _tempMax, _gpuMax, _memMax;
         int _nGpu, _nGpuBound, _nCpuBound; double _gpuLoadSum;   // charge GPU et indice limité CPU / GPU
+        int _fpsN, _lowN; double _fpsSum, _lowSum; long _saccBase = -1, _saccLast;
         public event Action<string> Started;
         public event Action<GameSession> Ended;
         static readonly HashSet<string> Exclude = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
@@ -107,6 +108,11 @@ namespace PerfMonitorLive.Metrics
                     int b = Bottleneck.Classify(latest.gpuLoad, latest.cpuCore, latest.cpu);
                     if (b == Bottleneck.Gpu) _nGpuBound++; else if (b == Bottleneck.Cpu) _nCpuBound++;
                 }
+                if (latest.fps.HasValue) { _fpsN++; _fpsSum += latest.fps.Value; }
+                if (latest.fps1.HasValue) { _lowN++; _lowSum += latest.fps1.Value; }
+                // total monotone : la différence fin - début compte chaque saccade une fois, même entre deux ticks
+                if (_saccBase < 0) _saccBase = latest.StutterTotal;
+                _saccLast = Math.Max(_saccLast, latest.StutterTotal);
             }
             return Active;
         }
@@ -114,6 +120,7 @@ namespace PerfMonitorLive.Metrics
         void Begin(string game, DateTime now)
         {
             Active = true; Game = game; _start = now; _n = 0; _cpuSum = _cpuMax = _tempMax = _gpuMax = _memMax = 0; _nGpu = _nGpuBound = _nCpuBound = 0; _gpuLoadSum = 0;
+            _fpsN = _lowN = 0; _fpsSum = _lowSum = 0; _saccBase = -1; _saccLast = 0;
             Log("Session jeu : " + game);
             Started?.Invoke(game);
         }
@@ -121,7 +128,9 @@ namespace PerfMonitorLive.Metrics
         {
             Active = false;
             var sess = new GameSession { ts = _start.ToString("yyyy-MM-ddTHH:mm:ss"), game = Game, min = Math.Round((now - _start).TotalMinutes, 1), cpuAvg = _n > 0 ? Math.Round(_cpuSum / _n) : 0, cpuMax = _cpuMax, tempMax = _tempMax, gpuMax = _gpuMax, memMax = Math.Round(_memMax),
-                gpuLoadAvg = _nGpu > 0 ? Math.Round(_gpuLoadSum / _nGpu) : (double?)null, bound = Bottleneck.Verdict(_nGpuBound, _nCpuBound, _nGpu) };
+                gpuLoadAvg = _nGpu > 0 ? Math.Round(_gpuLoadSum / _nGpu) : (double?)null, bound = Bottleneck.Verdict(_nGpuBound, _nCpuBound, _nGpu),
+                fpsAvg = _fpsN > 0 ? Math.Round(_fpsSum / _fpsN) : null, fps1 = _lowN > 0 ? Math.Round(_lowSum / _lowN) : null,
+                sacc = _fpsN > 0 && _saccBase >= 0 ? Math.Max(0, _saccLast - _saccBase) : null };
             try { Save(sess); } catch { }
             Game = null; _candidate = null; Pid = 0;
             Ended?.Invoke(sess);

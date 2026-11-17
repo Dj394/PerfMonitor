@@ -16,7 +16,7 @@ namespace PerfMonitorLive.Metrics
     /// pas de BSOD, pas de vidage mémoire, aucune trace dans les journaux Windows. Ce qu'il faut alors, c'est
     /// pouvoir relire les dernières secondes avant le noir. D'où quatre choix :
     /// <list type="bullet">
-    /// <item>peu de colonnes, en CSV : lisible à l'œil et dans un tableur, sans outil ;</item>
+    /// <item>peu de colonnes, en CSV (dont, pendant un jeu, FPS, 1 % low, temps d'image moyen et saccades) : lisible à l'œil et dans un tableur, sans outil ;</item>
     /// <item>format « CSV à la française », fixe quelle que soit la culture : séparateur « ; » ET virgule décimale
     /// (12,035). Un Excel en français l'ouvre d'un double-clic avec des nombres (et non du texte ou des dates comme
     /// avec 12.035 ou 3.3), et le format reste déterministe pour les autres outils (pandas : <c>sep=';', decimal=','</c>).
@@ -51,7 +51,10 @@ namespace PerfMonitorLive.Metrics
         byte[] _bytes = new byte[1024 * 3];
         static readonly UTF8Encoding Utf8 = new UTF8Encoding(false);
 
-        internal const string Header = "heure;fps;v12;v5;v33;cpuW;gpuW;cpuC;gpuC;gpuMHz;fanMax;cpuPct;jeu";
+        /// <summary>Colonnes. Les trois dernières (1 % low, temps d'image moyen en ms, saccades sur 2 s) ont été ajoutées
+        /// en fin de ligne : les colonnes existantes gardent leur position, et <see cref="CrashReport"/> lit par nom
+        /// d'en-tête (une colonne qu'il ne connaît pas est ignorée).</summary>
+        internal const string Header = "heure;fps;v12;v5;v33;cpuW;gpuW;cpuC;gpuC;gpuMHz;fanMax;cpuPct;jeu;fps1;fpsMs;sacc";
         static readonly byte[] HeaderBytes = Utf8.GetBytes(Header + "\n");
 
         // --- écriture : file bornée vidée par un thread dédié
@@ -100,7 +103,10 @@ namespace PerfMonitorLive.Metrics
                 N(s.gpuMHz, 0); Put(';');
                 Num(fanMax); Put(';');
                 Num(Math.Round(s.cpu)); Put(';');
-                Put(Game() ? '1' : '0'); Put('\n');
+                Put(Game() ? '1' : '0'); Put(';');
+                N(s.fps1, 0); Put(';'); N(s.fpsMs, 2); Put(';');
+                if (s.sacc.HasValue) Num(s.sacc.Value);
+                Put('\n');
                 int nb = Utf8.GetBytes(_c, 0, _n, _bytes, 0);
                 Enqueue(_openFile, _bytes.AsSpan(0, nb).ToArray());
             }

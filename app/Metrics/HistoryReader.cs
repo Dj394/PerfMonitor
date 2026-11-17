@@ -70,6 +70,8 @@ namespace PerfMonitorLive.Metrics
                 case "stor.health": return s.Stor(inst)?.Errors;
                 case "fan": return s.Fan(inst)?.rpm;
                 case "fps": return s.fps;
+                case "fps1": return s.fps1;
+                case "fpsMs": return s.fpsMs;
                 case "v12": return s.v12;
                 case "v5": return s.v5;
                 case "v33": return s.v33;

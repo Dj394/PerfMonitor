@@ -560,6 +560,7 @@ namespace PerfMonitorLive.Metrics
                 if (!double.IsNaN(t)) s.temp = t;
             }
             s.fps = Fps.Read();   // un seul appel par mesure : la lecture consomme le compteur pour calculer un debit
+            s.fps1 = Fps.Low1; s.fpsMs = Fps.FrameMs; s.sacc = Fps.Stutters; s.StutterTotal = Fps.StutterTotal;
             Lap(5);
             return s;
         }
