@@ -154,10 +154,12 @@ namespace PerfMonitorLive.Metrics
 
         /// <summary>Format des compteurs PDH. Les propriétés <c>Win32_PerfFormattedData_*</c> lues jusqu'ici sont des
         /// entiers : WMI tronque la valeur calculée (vérifié : % temps disque 80 → file d'attente 0, 177 → 1) et ne la
-        /// plafonne pas à 100. FMT_LARGE | NOCAP100 reproduit exactement cette conversion. Conséquence héritée :
-        /// la latence (secondes entières) et la file d'attente valent presque toujours 0 ; passer à FMT_DOUBLE
-        /// donnerait les vraies valeurs, mais changerait l'historique et réveillerait les règles « disk.lat ».</summary>
+        /// plafonne pas à 100. FMT_LARGE | NOCAP100 reproduit exactement cette conversion pour les taux et pourcentages.</summary>
         const uint CounterFormat = Pdh.FMT_LARGE | Pdh.FMT_NOCAP100;
+        /// <summary>File d'attente et latence en valeurs décimales : tronquées à l'entier (comme WMI jusqu'à la 3.2.0),
+        /// la latence était lue en secondes entières et valait toujours 0, ce qui rendait les règles « disk.lat » inopérantes.
+        /// Le repli WMI garde cette limite.</summary>
+        const uint FractionalFormat = Pdh.FMT_DOUBLE | Pdh.FMT_NOCAP100;
         static readonly string[] PdhPaths =
         {
             @"\Memory\Pages Input/sec",
@@ -238,7 +240,7 @@ namespace PerfMonitorLive.Metrics
             var counts = _pdhCounts;
             for (int c = CPct; c < PdhPaths.Length; c++)
             {
-                st = _pdh.Array(_pdhCounters[c], CounterFormat, ref _pdhItems[c], out counts[c]);
+                st = _pdh.Array(_pdhCounters[c], c == CQueue || c == CLat ? FractionalFormat : CounterFormat, ref _pdhItems[c], out counts[c]);
                 if (st != 0) { err = PdhPaths[c] + " 0x" + st.ToString("X8"); return null; }
             }
             var pct = _pdhItems[CPct];
