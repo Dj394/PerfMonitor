@@ -1,0 +1,35 @@
+name: build
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Build (Release)
+        run: dotnet build app/PerfMonitorLive.csproj -c Release -nologo
+
+      - name: Tests
+        run: dotnet test tests/PerfMonitorLive.Tests/PerfMonitorLive.Tests.csproj -c Release -nologo
+
+      # Identique à build.ps1 (sans -Portable) : dépendant du framework, fichier unique, win-x64
+      - name: Publish
+        run: dotnet publish app/PerfMonitorLive.csproj -c Release -r win-x64 -p:SelfContained=false -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:DebugType=none -o app/publish -nologo -v q
+
+      - name: Upload PerfMonitorLive.exe
+        uses: actions/upload-artifact@v4
+        with:
+          name: PerfMonitorLive-win-x64
+          path: app/publish/PerfMonitorLive.exe
+          if-no-files-found: error

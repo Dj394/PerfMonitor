@@ -12,8 +12,8 @@ namespace PerfMonitorLive.UI
     {
         readonly WF.NotifyIcon _icon = new WF.NotifyIcon();
         IntPtr _hIcon = IntPtr.Zero;
-        readonly WF.ToolStripMenuItem _pause, _startup, _widget, _profAuto, _profTravail, _profJeu, _profNuit;
-        public event Action LeftClick, OpenClicked, HistoryClicked, ReportClicked, PauseToggled, StartupToggled, QuitClicked, TestClicked, WidgetToggled, DigestClicked;
+        readonly WF.ToolStripMenuItem _pause, _startup, _widget, _profAuto, _profTravail, _profJeu, _profNuit, _crash;
+        public event Action LeftClick, OpenClicked, HistoryClicked, ReportClicked, PauseToggled, StartupToggled, QuitClicked, TestClicked, WidgetToggled, DigestClicked, CrashClicked;
         public event Action<string> ProfileSelected;   // "Auto" | "Travail" | "Jeu" | "Nuit"
 
         public TrayIcon()
@@ -23,6 +23,8 @@ namespace PerfMonitorLive.UI
             menu.Items.Add("Historique (graphiques dans l'appli)", null, (s, e) => HistoryClicked?.Invoke());
             menu.Items.Add("Rapport HTML 24 h", null, (s, e) => ReportClicked?.Invoke());
             menu.Items.Add("Bilan de la veille", null, (s, e) => DigestClicked?.Invoke());
+            _crash = new WF.ToolStripMenuItem("Dernier arrêt brutal…", null, (s, e) => CrashClicked?.Invoke()) { Enabled = false, ToolTipText = "Aucun arrêt inattendu relevé" };
+            menu.Items.Add(_crash);
             menu.Items.Add(new WF.ToolStripSeparator());
             var prof = new WF.ToolStripMenuItem("Profil de seuils");
             _profAuto = new WF.ToolStripMenuItem("Automatique (jeu / nuit / travail)", null, (s, e) => ProfileSelected?.Invoke("Auto"));
@@ -50,6 +52,13 @@ namespace PerfMonitorLive.UI
         public void SetPaused(bool paused) => _pause.Text = paused ? "Reprendre les notifications" : "Mettre les notifications en pause (1 h)";
         public void SetStartup(bool on) => _startup.Checked = on;
         public void SetWidget(bool on) => _widget.Checked = on;
+        /// <summary>Entrée « Dernier arrêt brutal… » : grisée tant qu'aucun arrêt inattendu n'a été relevé.</summary>
+        public void SetCrash(DateTime? when)
+        {
+            _crash.Enabled = when.HasValue;
+            _crash.Text = when.HasValue ? "Dernier arrêt brutal (" + when.Value.ToString("dd/MM HH:mm") + ")…" : "Dernier arrêt brutal…";
+            _crash.ToolTipText = when.HasValue ? "" : "Aucun arrêt inattendu relevé";
+        }
         public void SetProfile(string active, bool auto)
         {
             _profAuto.Checked = auto; _profTravail.Checked = !auto && active == "Travail"; _profJeu.Checked = !auto && active == "Jeu"; _profNuit.Checked = !auto && active == "Nuit";

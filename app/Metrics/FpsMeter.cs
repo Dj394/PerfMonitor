@@ -18,8 +18,11 @@ namespace PerfMonitorLive.Metrics
     /// PerfMonitor tourne déjà élevé (tâche planifiée) pour les capteurs, donc c'est acquis.</item>
     /// <item>Seules les applications passant par DXGI sont vues, ce qui couvre Direct3D 10 à 12 —
     /// donc Apex et League. Un jeu purement Vulkan ou OpenGL ne compterait pas.</item>
-    /// <item>La lecture est un débit : <see cref="Read"/> divise le nombre d'images accumulées par le temps
-    /// écoulé depuis l'appel précédent. Il faut donc l'appeler à cadence régulière, et une seule fois par mesure.</item>
+    /// <item>Le débit est calculé à partir de l'<b>horodatage</b> des images (fenêtre glissante de 2 s), et non de
+    /// leur heure d'arrivée : une session ETW temps réel livre les événements par lots (vidage des tampons ~1 fois/s),
+    /// ce qui donnait alternativement ~0 puis le double quand la mesure et le vidage se décalaient.</item>
+    /// <item>Sans image récente du PID cible (jeu D3D9/Vulkan/OpenGL, jeu masqué ou fermé…), la mesure vaut null
+    /// (« — ») : jamais un 0 inventé.</item>
     /// <item>La session ETW n'est ouverte que pendant un jeu (PID cible non nul) et refermée ~10 s après :
     /// hors jeu, aucun thread, aucun tampon noyau, aucun événement à filtrer.</item>
     /// </list></summary>
@@ -52,12 +55,15 @@ namespace PerfMonitorLive.Metrics
         volatile bool _live;             // fournisseur activé, les images arrivent
         volatile bool _disposed;
         volatile int _target = -1;       // PID compté par le rappel ETW (-1 = personne)
-        long _frames;                    // images du PID cible depuis l'ouverture (Interlocked)
+        readonly FrameWindow _window = new FrameWindow();   // horodatages des dernières images du PID cible
         int _failures; DateTime _retryAt = DateTime.MinValue;
 
         // état de lecture (thread de mesure uniquement)
-        int _lastPid; long _lastCount; DateTime _lastTime; double? _last;
+        int _lastPid;
         DateTime _lastWanted;
+        /// <summary>Largeur de la fenêtre glissante, et délai sans nouvelle image au-delà duquel on ne publie plus rien.
+        /// Le délai couvre le vidage des tampons ETW (~1 s) et la cadence de mesure.</summary>
+        const double WindowMs = 2000, StaleMs = 3000;
 
         public void Start()
         {
@@ -65,14 +71,15 @@ namespace PerfMonitorLive.Metrics
             Available = true; Status = "en attente d'un jeu";
         }
 
-        /// <summary>Rappel ETW : appelé pour chaque événement remis. Ni allocation ni chaîne — uniquement des entiers.</summary>
+        /// <summary>Rappel ETW : appelé pour chaque événement remis. Ni allocation ni chaîne — uniquement des nombres.</summary>
         void OnEvent(TraceEvent ev)
         {
-            if (ev.ProcessID != _target) return;
+            int pid = ev.ProcessID;
+            if (pid != _target) return;
             int id = (int)ev.ID;
             if (id != PresentStop && id != PresentMpoStop) return;
             if (ev.ProviderGuid != DxgiProvider) return;
-            Interlocked.Increment(ref _frames);
+            _window.Add(pid, ev.TimeStampRelativeMSec);   // horodatage de l'image (QPC de l'événement), pas l'heure de livraison
         }
 
         void EnsureSession(DateTime now)
@@ -161,8 +168,9 @@ namespace PerfMonitorLive.Metrics
             }
         }
 
-        /// <summary>Débit d'images depuis l'appel précédent. À appeler une seule fois par mesure, à cadence régulière.
-        /// Renvoie null tant qu'il n'y a pas deux points de mesure sur le même processus.</summary>
+        /// <summary>Images par seconde du PID cible, sur les 2 dernières secondes d'images (horodatages ETW).
+        /// Renvoie null sans cible, pendant l'ouverture de la session, et tant qu'aucune image récente n'a été vue
+        /// pour ce PID (moins de 2 images, ou plus de 3 s sans nouvelle image). Lecture sans effet de bord sur la mesure.</summary>
         public double? Read()
         {
             if (!Available) return null;
@@ -172,33 +180,77 @@ namespace PerfMonitorLive.Metrics
 
             if (pid <= 0)
             {
-                _target = -1; _lastPid = 0; _last = null;
+                _target = -1;
+                if (_lastPid != 0) { _lastPid = 0; _window.Reset(-1); }
                 if (_thread != null && now - _lastWanted > CloseAfter) StopSession();
                 return null;
             }
             _lastWanted = now;
+            // changement de jeu : on repart d'une fenêtre vide, attribuée au nouveau PID (une image de l'ancien PID
+            // encore en vol est rejetée par la fenêtre elle-même)
+            if (pid != _lastPid) { _lastPid = pid; _window.Reset(pid); }
             _target = pid;
-            if (!_live) { EnsureSession(now); _lastPid = 0; _last = null; return null; }   // session en cours d'ouverture
-
-            long count = Interlocked.Read(ref _frames);
-            // changement de jeu, session rouverte ou compteur reparti de zéro : on repose la référence sans rien annoncer
-            if (pid != _lastPid || count < _lastCount)
-            {
-                _lastPid = pid; _lastCount = count; _lastTime = now; _last = null;
-                return null;
-            }
-            var dt = (now - _lastTime).TotalSeconds;
-            if (dt < 0.3) return _last;   // trop rapproché : le bruit dépasserait la mesure
-
-            _last = Math.Round((count - _lastCount) / dt);
-            _lastCount = count; _lastTime = now;
-            return _last;
+            // session en cours d'ouverture (ou à rouvrir) : les horodatages ETW sont relatifs au début de la session,
+            // la fenêtre sera donc vidée à la première lecture sur la session vivante (_lastPid = 0)
+            if (!_live) { EnsureSession(now); _lastPid = 0; return null; }
+            return _window.Rate(Environment.TickCount64, WindowMs, StaleMs);
         }
 
         public void Dispose()
         {
             _disposed = true;
             StopSession();
+        }
+    }
+
+    /// <summary>Horodatages (ms) des dernières images d'un processus, dans un tampon circulaire préalloué.
+    /// Écrit par le thread ETW, lu par le thread de mesure : un verrou court, aucune allocation après construction.</summary>
+    internal sealed class FrameWindow
+    {
+        readonly double[] _ts;
+        readonly object _lock = new object();
+        int _pid = -1, _head, _count;
+        double _seenTs = double.NegativeInfinity, _seenAt;   // dernier horodatage d'image constaté par Rate, et quand (horloge du lecteur)
+
+        public FrameWindow(int capacity = 8192) { _ts = new double[capacity]; }
+
+        /// <summary>Vide la fenêtre et n'accepte plus que les images de <paramref name="pid"/>.</summary>
+        public void Reset(int pid)
+        {
+            lock (_lock) { _pid = pid; _head = 0; _count = 0; _seenTs = double.NegativeInfinity; }
+        }
+
+        public void Add(int pid, double tsMs)
+        {
+            lock (_lock)
+            {
+                if (pid != _pid) return;
+                _ts[_head] = tsMs;
+                _head = (_head + 1) % _ts.Length;
+                if (_count < _ts.Length) _count++;
+            }
+        }
+
+        /// <summary>Débit sur les <paramref name="windowMs"/> dernières millisecondes d'images, la fenêtre se terminant
+        /// à la dernière image reçue (et non à l'instant présent, les images arrivant par lots).
+        /// <paramref name="nowMs"/> est l'horloge monotone du lecteur : si aucune nouvelle image n'est apparue depuis
+        /// plus de <paramref name="staleMs"/>, renvoie null. Renvoie aussi null avec moins de 2 images.</summary>
+        public double? Rate(double nowMs, double windowMs, double staleMs)
+        {
+            lock (_lock)
+            {
+                if (_count == 0) return null;
+                double last = double.NegativeInfinity;
+                for (int i = 0; i < _count; i++) { double t = _ts[i]; if (t > last) last = t; }
+                if (last > _seenTs) { _seenTs = last; _seenAt = nowMs; }
+                if (nowMs - _seenAt > staleMs) return null;   // plus d'image : jeu fermé, masqué, figé ou non mesurable
+
+                double from = last - windowMs, first = last; int n = 0;
+                for (int i = 0; i < _count; i++) { double t = _ts[i]; if (t >= from) { n++; if (t < first) first = t; } }
+                double span = last - first;
+                if (n < 2 || span < 100) return null;
+                return Math.Round((n - 1) * 1000.0 / span);
+            }
         }
     }
 }

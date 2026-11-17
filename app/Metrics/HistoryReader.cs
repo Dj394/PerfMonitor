@@ -66,6 +66,11 @@ namespace PerfMonitorLive.Metrics
                 case "stor.temp": { var st = s.Stor(inst); return st == null || st.t <= 0 ? (double?)null : st.t; }
                 case "stor.health": return s.Stor(inst)?.Errors;
                 case "fan": return s.Fan(inst)?.rpm;
+                case "fps": return s.fps;
+                case "v12": return s.v12;
+                case "v5": return s.v5;
+                case "v33": return s.v33;
+                case "bat": return s.bat;
             }
             return null;
         }

@@ -7,6 +7,7 @@ using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
+using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
 using PerfMonitorLive.Metrics;
@@ -60,6 +61,7 @@ namespace PerfMonitorLive.UI
         bool _reallyClose;
         Sample _lastSample;
         readonly HashSet<string> _fanSeen = new HashSet<string>();
+        bool _sawFps;
 
         public MainWindow(App app)
         {
@@ -106,9 +108,16 @@ namespace PerfMonitorLive.UI
             if (IsVisible)
             {
                 UpdateLiveState();                      // reconstruit d'abord les cartes « sales »…
-                if (Cards.ItemsSource == null) Cards.ItemsSource = _cards;   // …puis rebranche l'affichage
+                bool replug = Cards.ItemsSource == null;
+                if (replug) Cards.ItemsSource = _cards;   // …puis rebranche l'affichage
                 if (Procs.ItemsSource == null) Procs.ItemsSource = _procs;
                 Relayout();
+                if (replug && _liveOffset > 0)
+                {
+                    // Position de défilement de l'onglet Live : rétablie une fois les conteneurs régénérés
+                    double off = _liveOffset;
+                    Dispatcher.BeginInvoke(new Action(() => { LiveScroll.ScrollToVerticalOffset(off); AdvisorRelayout(); }), DispatcherPriority.Loaded);
+                }
                 RefreshScreens(); UpdatePauseText(); UpdateProfilePill();
                 RefreshShown();
                 return;
@@ -117,8 +126,23 @@ namespace PerfMonitorLive.UI
             // Masquée (fermeture → zone de notification, ou App.ToggleMain) : on rend le maximum de mémoire.
             UpdateLiveState();
             History?.Release();
+            CommitCardEdit();                                     // seuil/durée en cours de saisie : validé avant destruction du champ
+            if (Cards.ItemsSource != null) _liveOffset = LiveScroll.VerticalOffset;   // avant que la liste vidée ne ramène l'offset à 0
             Cards.ItemsSource = null; Procs.ItemsSource = null;   // les VM et leur historique restent
             Dispatcher.BeginInvoke(new Action(TrimMemory), DispatcherPriority.ContextIdle);
+        }
+
+        double _liveOffset;
+
+        /// <summary>Valide la saisie (liaison LostFocus) d'un champ d'une carte qui a encore le focus logique.</summary>
+        void CommitCardEdit()
+        {
+            try
+            {
+                if (FocusManager.GetFocusedElement(this) is TextBox tb && Cards.IsAncestorOf(tb))
+                    tb.GetBindingExpression(TextBox.TextProperty)?.UpdateSource();
+            }
+            catch (Exception ex) { Paths.Log("commit edit: " + ex.Message); }
         }
 
         /// <summary>Après masquage : GC compactant (LOH comprise) puis réduction du working set.</summary>
@@ -217,7 +241,8 @@ namespace PerfMonitorLive.UI
             if ((smp.cpuW.HasValue || hw.SawCpuPower) && !_byKey.ContainsKey("cpuW")) Card("cpuW", "Consommation CPU", "🔌", s.Get("cpuW"));
             if ((smp.gpuW.HasValue || hw.SawGpuPower) && !_byKey.ContainsKey("gpuW")) Card("gpuW", "Consommation GPU", "🔌", s.Get("gpuW"));
             // FPS : la carte n'apparait qu'une fois un jeu mesure, et reste ensuite (l'historique garde son interet hors jeu)
-            if (smp.fps.HasValue && !_byKey.ContainsKey("fps")) Card("fps", "Images par seconde", "🎞️", null);
+            if (smp.fps.HasValue) _sawFps = true;   // collant, comme hw.SawGpuTemp : survit à RebuildCards hors jeu
+            if (_sawFps && !_byKey.ContainsKey("fps")) Card("fps", "Images par seconde", "🎞️", null);
             // Tensions : seuls les trois rails identifiés ont une carte. Les autres capteurs du Super I/O
             // (Vcore, AVCC, 3VSB, VIN…) restent enregistrés dans l'historique, mais encombreraient le tableau de bord.
             if (smp.v12.HasValue && !_byKey.ContainsKey("v12")) Card("v12", "Rail +12 V", "⚡", null);

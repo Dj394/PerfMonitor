@@ -223,9 +223,15 @@ namespace PerfMonitorLive.Metrics
             if (pdhName.AsSpan().IndexOfAny(WmiReplaced) < 0) return pdhName;
             if (_wmiNames.TryGetValue(pdhName, out var n)) return n;
             if (_wmiNames.Count > 256) _wmiNames.Clear();
+            return _wmiNames[pdhName] = ToWmiName(pdhName);
+        }
+
+        /// <summary>Transformation pure (testée) : ( ) → [ ], et # / \ → _.</summary>
+        internal static string ToWmiName(string pdhName)
+        {
             var sb = new StringBuilder(pdhName);
             sb.Replace('(', '[').Replace(')', ']').Replace('#', '_').Replace('/', '_').Replace('\\', '_');
-            return _wmiNames[pdhName] = sb.ToString();
+            return sb.ToString();
         }
 
         WmiSnap ReadPdh(List<string> netNames, out string err)

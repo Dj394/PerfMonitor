@@ -26,6 +26,9 @@
     <Resource Include="app-icon.png" />
   </ItemGroup>
   <ItemGroup>
+    <InternalsVisibleTo Include="PerfMonitorLive.Tests" />
+  </ItemGroup>
+  <ItemGroup>
     <PackageReference Include="System.Management" Version="10.0.2" />
     <PackageReference Include="LibreHardwareMonitorLib" Version="0.9.6" />
     <PackageReference Include="Microsoft.Diagnostics.Tracing.TraceEvent" Version="3.2.6" />

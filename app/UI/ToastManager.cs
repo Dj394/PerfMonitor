@@ -49,9 +49,10 @@ namespace PerfMonitorLive.UI
         {
             if (!force && !ShouldShow(a)) return;
             while (_open.Count >= MaxToasts) { var oldest = _open[0]; _open.RemoveAt(0); oldest.FadeClose(); }
-            var w = new ToastWindow(a, a.Severity == Severity.Info && a.RuleId == "digest" ? 0 : _settings.ToastSec);
+            var w = new ToastWindow(a, a.Persistent || (a.Severity == Severity.Info && a.RuleId == "digest") ? 0 : _settings.ToastSec);
             w.Closed2 += t => { _open.Remove(t); Relayout(); };
-            w.Clicked += () => ToastClicked?.Invoke();
+            var click = a.Click;
+            w.Clicked += () => { if (click != null) { try { click(); } catch (Exception ex) { Paths.Log("toast: " + ex.Message); } } else ToastClicked?.Invoke(); };
             _open.Add(w);
             var helper = new WindowInteropHelper(w); helper.EnsureHandle();
             var scr = TargetScreen(); w.Left = scr.WorkingArea.Right - w.Width - 12; w.Top = scr.WorkingArea.Bottom - 120;
