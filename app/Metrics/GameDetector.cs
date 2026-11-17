@@ -41,8 +41,14 @@ namespace PerfMonitorLive.Metrics
                 if (h != IntPtr.Zero)
                 {
                     GetWindowThreadProcessId(h, out uint pid);
-                    string name = null;
-                    try { using (var p = Process.GetProcessById((int)pid)) name = p.ProcessName; } catch { }
+                    string name;
+                    if (pid != 0 && (int)pid == _namePid) name = _nameOfPid;   // même fenêtre qu'au tick précédent : pas de nouvelle requête
+                    else
+                    {
+                        name = ProcName(pid);
+                        if (name != null) { _namePid = (int)pid; _nameOfPid = name; }   // un échec n'est pas mémorisé : on réessaie au prochain tick
+                        else _namePid = -1;
+                    }
                     if (name != null && !Exclude.Contains(name))
                     {
                         _fgPid = (int)pid;
@@ -93,6 +99,38 @@ namespace PerfMonitorLive.Metrics
             Ended?.Invoke(sess);
         }
         public void ForceEnd() { if (Active) End(DateTime.Now); }
+
+        int _namePid = -1; string _nameOfPid;
+        readonly char[] _pathBuf = new char[1024];
+
+        /// <summary>Nom du processus sans extension, comme <see cref="Process.ProcessName"/>, mais via OpenProcess + QueryFullProcessImageName :
+        /// <c>Process.GetProcessById(..).ProcessName</c> énumère tous les processus du système à chaque appel.</summary>
+        string ProcName(uint pid)
+        {
+            if (pid == 0) return null;
+            IntPtr hp = OpenProcess(0x1000 /* PROCESS_QUERY_LIMITED_INFORMATION */, false, pid);
+            if (hp != IntPtr.Zero)
+            {
+                try
+                {
+                    uint len = (uint)_pathBuf.Length;
+                    if (QueryFullProcessImageNameW(hp, 0, _pathBuf, ref len) && len > 0)
+                    {
+                        int start = 0;
+                        for (int i = (int)len - 1; i >= 0; i--) if (_pathBuf[i] == '\\' || _pathBuf[i] == '/') { start = i + 1; break; }
+                        int n = (int)len - start;
+                        if (n > 4 && string.Compare(new string(_pathBuf, (int)len - 4, 4), ".exe", StringComparison.OrdinalIgnoreCase) == 0) n -= 4;
+                        if (n > 0) return new string(_pathBuf, start, n);
+                    }
+                }
+                finally { CloseHandle(hp); }
+            }
+            try { using (var p = Process.GetProcessById((int)pid)) return p.ProcessName; } catch { return null; }   // repli (accès refusé, chemin trop long...)
+        }
+
+        [DllImport("kernel32.dll", SetLastError = true)] static extern IntPtr OpenProcess(uint access, bool inherit, uint pid);
+        [DllImport("kernel32.dll", SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)] static extern bool CloseHandle(IntPtr h);
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)] static extern bool QueryFullProcessImageNameW(IntPtr h, uint flags, [Out] char[] buf, ref uint size);
 
         [StructLayout(LayoutKind.Sequential)] public struct RECT { public int L, T, R, B; }
         [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();

@@ -8,47 +8,69 @@ namespace PerfMonitorLive.Alerts
     /// <summary>Suivi mémoire/handles par processus (1 point/min, 3 h) pour repérer les fuites.</summary>
     public class LeakDetector
     {
-        class Pt { public DateTime T; public double Mem, Handles; }
+        struct Pt { public DateTime T; public double Mem, Handles; }
         readonly Dictionary<string, List<Pt>> _hist = new Dictionary<string, List<Pt>>();
         DateTime _last = DateTime.MinValue;
         public List<LeakInfo> Current { get; private set; } = new List<LeakInfo>();
-        static readonly TimeSpan Keep = TimeSpan.FromHours(3);
+        static readonly TimeSpan Keep = TimeSpan.FromHours(3), Recent = TimeSpan.FromMinutes(2), Hour = TimeSpan.FromMinutes(60);
+        // réutilisés d'un appel à l'autre (Feed n'est appelé que par le thread de collecte)
+        readonly HashSet<string> _seen = new HashSet<string>();
+        readonly List<string> _gone = new List<string>();
+        DateTime _now;
+        readonly Predicate<Pt> _tooOld;
+        public LeakDetector() { _tooOld = p => _now - p.T > Keep; }   // délégué créé une fois (pas de fermeture par appel)
 
-        /// <summary>À appeler avec la liste complète (nom, mem Mo, handles) — enregistre 1 point/min et recalcule.</summary>
-        public void Feed(DateTime now, IEnumerable<ProcSample> procs)
+        /// <summary>À appeler avec la liste complète (nom, mem Mo, handles), un élément par programme (noms uniques :
+        /// le <see cref="Sampler"/> regroupe déjà les instances) — enregistre 1 point/min et recalcule.</summary>
+        public void Feed(DateTime now, List<ProcSample> procs)
         {
             if ((now - _last).TotalSeconds < 60) return;
-            _last = now;
-            var seen = new HashSet<string>();
-            foreach (var g in procs.GroupBy(p => p.n))
+            _last = now; _now = now;
+            _seen.Clear();
+            foreach (var p in procs)
             {
-                var mem = g.Sum(p => p.mem); var h = g.Sum(p => p.h);
+                double mem = p.mem, h = p.h;
                 if (mem < 150 && h < 3000) continue;   // on ne suit que les processus significatifs
-                seen.Add(g.Key);
-                if (!_hist.TryGetValue(g.Key, out var l)) _hist[g.Key] = l = new List<Pt>();
+                _seen.Add(p.n);
+                if (!_hist.TryGetValue(p.n, out var l)) _hist[p.n] = l = new List<Pt>();
                 l.Add(new Pt { T = now, Mem = mem, Handles = h });
-                l.RemoveAll(p => now - p.T > Keep);
+                l.RemoveAll(_tooOld);
             }
-            foreach (var k in _hist.Keys.ToList()) if (!seen.Contains(k)) { _hist[k].Add(new Pt { T = now, Mem = double.NaN, Handles = double.NaN }); if (_hist[k].Count(p => double.IsNaN(p.Mem)) > 5) _hist.Remove(k); }
+            _gone.Clear();
+            foreach (var kv in _hist)
+            {
+                if (_seen.Contains(kv.Key)) continue;
+                kv.Value.Add(new Pt { T = now, Mem = double.NaN, Handles = double.NaN });
+                int nan = 0; foreach (var p in kv.Value) if (double.IsNaN(p.Mem)) nan++;
+                if (nan > 5) _gone.Add(kv.Key);
+            }
+            foreach (var k in _gone) _hist.Remove(k);
 
             var res = new List<LeakInfo>();
             foreach (var kv in _hist)
             {
-                var pts = kv.Value.Where(p => !double.IsNaN(p.Mem)).ToList();
-                if (pts.Count < 10) continue;
-                var last = pts[pts.Count - 1];
-                if (now - last.T > TimeSpan.FromMinutes(2)) continue;
-                var p1 = pts.FirstOrDefault(p => now - p.T <= TimeSpan.FromMinutes(60));
-                var p3 = pts[0];
-                var info = new LeakInfo
+                // points valides (hors absences) : premier, premier de la dernière heure, dernier
+                int count = 0, first = -1, firstHour = -1, last = -1;
+                var pts = kv.Value;
+                for (int i = 0; i < pts.Count; i++)
                 {
-                    Name = kv.Key, MemNowMB = last.Mem, HandlesNow = last.Handles,
-                    MemDelta1hMB = p1 == null ? 0 : last.Mem - p1.Mem,
-                    MemDelta3hMB = last.Mem - p3.Mem,
-                    HandlesDelta1h = p1 == null ? 0 : last.Handles - p1.Handles,
-                    SpanMin = (last.T - p3.T).TotalMinutes
-                };
-                res.Add(info);
+                    if (double.IsNaN(pts[i].Mem)) continue;
+                    count++; last = i;
+                    if (first < 0) first = i;
+                    if (firstHour < 0 && now - pts[i].T <= Hour) firstHour = i;
+                }
+                if (count < 10) continue;
+                var pl = pts[last];
+                if (now - pl.T > Recent) continue;
+                var p3 = pts[first];
+                res.Add(new LeakInfo
+                {
+                    Name = kv.Key, MemNowMB = pl.Mem, HandlesNow = pl.Handles,
+                    MemDelta1hMB = firstHour < 0 ? 0 : pl.Mem - pts[firstHour].Mem,
+                    MemDelta3hMB = pl.Mem - p3.Mem,
+                    HandlesDelta1h = firstHour < 0 ? 0 : pl.Handles - pts[firstHour].Handles,
+                    SpanMin = (pl.T - p3.T).TotalMinutes
+                });
             }
             Current = res;
         }

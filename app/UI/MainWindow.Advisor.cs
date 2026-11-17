@@ -25,9 +25,10 @@ namespace PerfMonitorLive.UI
             _advisor = new Advisor(_app.Settings.AdvisorDismissed);
             _advTimer.Tick += (s, e) => AdvisorTick();
             _advTimer.Start();
-            // flottement permanent de la mascotte
-            var bob = new DoubleAnimation(-4, 4, TimeSpan.FromSeconds(1.6)) { AutoReverse = true, RepeatBehavior = RepeatBehavior.Forever, EasingFunction = new SineEase { EasingMode = EasingMode.EaseInOut } };
-            MascotBob.BeginAnimation(System.Windows.Media.TranslateTransform.YProperty, bob);
+            // flottement de la mascotte : 30 i/s suffisent pour ±4 px en 1,6 s ; lancé/arrêté par UpdateMascotAnim
+            _bob = new DoubleAnimation(-4, 4, TimeSpan.FromSeconds(1.6)) { AutoReverse = true, RepeatBehavior = RepeatBehavior.Forever, EasingFunction = new SineEase { EasingMode = EasingMode.EaseInOut } };
+            Timeline.SetDesiredFrameRate(_bob, 30);
+            _bob.Freeze();
             Loaded += (s, e) => { ApplyAdvisorVisibility(); MoveMascot(RandomSpot(), false); };
             if (Environment.GetCommandLineArgs().Any(a => a.Equals("--demo", StringComparison.OrdinalIgnoreCase)))
             {   // démo : un conseil 6 s après l'ouverture
@@ -42,15 +43,31 @@ namespace PerfMonitorLive.UI
             bool on = _app.Settings.ShowAdvisor;
             Mascot.Visibility = on ? Visibility.Visible : Visibility.Collapsed;
             if (!on) Bubble.Visibility = Visibility.Collapsed;
+            UpdateMascotAnim();
+        }
+
+        DoubleAnimation _bob; bool _bobRunning;
+        /// <summary>Le flottement (horloge d'animation = rendu continu) ne tourne que si la mascotte est réellement visible :
+        /// fenêtre affichée et non réduite, onglet Live, conseiller activé.</summary>
+        void UpdateMascotAnim()
+        {
+            bool run = _bob != null && LiveTabShown && _app.Settings.ShowAdvisor;
+            if (run == _bobRunning) return;
+            _bobRunning = run;
+            MascotBob.BeginAnimation(TranslateTransform.YProperty, run ? _bob : null);
         }
 
         void AdvisorOnSample(Metrics.Sample s) => _advisor?.OnSample(s);
         public void SetLastBoot(Metrics.BootEntry b) { if (_advisor != null) _advisor.LastBoot = b; }
-        public void AdvisorAsk() => Mascot_Click(null, null);
+        /// <summary>Différé en priorité Loaded : appelé juste après un réaffichage (ItemsSource rebranché, onglet changé),
+        /// les conteneurs des cartes n'existent qu'après le passage de layout — sinon la mascotte part au hasard.</summary>
+        public void AdvisorAsk() => Dispatcher.BeginInvoke(new Action(() => Mascot_Click(null, null)), System.Windows.Threading.DispatcherPriority.Loaded);
         /// <summary>Après modification des paramètres (thème, compact, conseiller, profil).</summary>
         public void SettingsChangedHook()
         {
             ApplyAdvisorVisibility(); UpdateProfilePill();
+            foreach (var c in _cards) c.Invalidate();   // thème : bordure des cartes (Palette.Grid) sans attendre la mesure suivante
+            History?.ThemeChanged();                     // graphiques de l'historique et leur infobulle de survol
             Raise(nameof(CardMinHeight)); Raise(nameof(ValueFontSize)); Relayout();
         }
 
@@ -115,6 +132,11 @@ namespace PerfMonitorLive.UI
         {
             if (!_byKey.TryGetValue(key, out var vm)) return null;
             var cont = Cards.ItemContainerGenerator.ContainerFromItem(vm) as FrameworkElement;
+            if (cont == null && Cards.ItemsSource != null && IsVisible)
+            {   // conteneurs pas encore générés (ItemsSource rebranché au réaffichage) : forcer le layout puis réessayer
+                Cards.UpdateLayout();
+                cont = Cards.ItemContainerGenerator.ContainerFromItem(vm) as FrameworkElement;
+            }
             if (cont == null || !cont.IsVisible) return null;
             try
             {

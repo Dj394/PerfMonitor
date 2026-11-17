@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Linq;
@@ -11,8 +12,9 @@ namespace PerfMonitorLive.UI
     public class Vm : INotifyPropertyChanged
     {
         public event PropertyChangedEventHandler PropertyChanged;
-        protected void Raise([CallerMemberName] string n = null) => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(n));
-        protected bool Set<T>(ref T f, T v, [CallerMemberName] string n = null) { if (Equals(f, v)) return false; f = v; Raise(n); return true; }
+        protected virtual void Raise([CallerMemberName] string n = null) => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(n));
+        /// <summary>N'assigne et ne notifie que si la valeur change (égalité de valeur, chaînes comprises ; pinceaux : même instance grâce au cache de <see cref="Palette"/>).</summary>
+        protected bool Set<T>(ref T f, T v, [CallerMemberName] string n = null) { if (EqualityComparer<T>.Default.Equals(f, v)) return false; f = v; Raise(n); return true; }
     }
 
     /// <summary>Palette partagée (fenêtre + notifications).</summary>
@@ -25,8 +27,18 @@ namespace PerfMonitorLive.UI
         public static readonly Color Muted = Color.FromRgb(0x8C, 0x97, 0xA8);
         public static bool Light;
         public static Color Grid => Light ? Color.FromRgb(0xD9, 0xDF, 0xE8) : Color.FromRgb(0x27, 0x30, 0x3C);
-        public static SolidColorBrush B(Color c) { var b = new SolidColorBrush(c); b.Freeze(); return b; }
-        public static SolidColorBrush B(Color c, byte a) { var b = new SolidColorBrush(Color.FromArgb(a, c.R, c.G, c.B)); b.Freeze(); return b; }
+        // Pinceaux gelés partagés, un par couleur ARGB : la même couleur renvoie la même instance,
+        // donc Set() (comparaison par référence pour Brush) ne notifie plus à chaque mesure.
+        // Le thème change Palette.Grid (autre couleur → autre pinceau) : la notification a bien lieu.
+        static readonly ConcurrentDictionary<uint, SolidColorBrush> _brushes = new ConcurrentDictionary<uint, SolidColorBrush>();
+        public static SolidColorBrush B(Color c) => B(c, c.A);
+        public static SolidColorBrush B(Color c, byte a)
+        {
+            uint k = (uint)a << 24 | (uint)c.R << 16 | (uint)c.G << 8 | c.B;
+            if (_brushes.TryGetValue(k, out var b)) return b;
+            b = new SolidColorBrush(Color.FromArgb(a, c.R, c.G, c.B)); b.Freeze();
+            return _brushes.GetOrAdd(k, b);
+        }
     }
 
     /// <summary>Une carte métrique : valeur live, mini-graphique 5 min coloré selon la tendance, seuil éditable.</summary>
@@ -36,7 +48,30 @@ namespace PerfMonitorLive.UI
         double W = 300, H = 58;
         public void Resize(double w, double h) { if (w < 20 || h < 10) return; if (Math.Abs(w - W) < 1 && Math.Abs(h - H) < 1) return; W = w; H = h; Raise(nameof(SparkW)); Refresh(); }
         public double SparkW => W;
-        readonly Queue<double> _hist = new Queue<double>();
+        // Historique : tampon circulaire (plus de Queue + ToArray + LINQ à chaque mesure)
+        readonly double[] _buf = new double[HistoryLen];
+        int _head, _count;                       // _head = prochaine écriture
+        readonly Point[] _pts = new Point[HistoryLen];   // points valides (réutilisés)
+        readonly int[] _idx = new int[HistoryLen];       // index dans l'historique de chaque point
+        double At(int i) => _buf[(_head - _count + i + HistoryLen) % HistoryLen];   // i : 0 = plus ancien
+        static readonly Geometry EmptyGeom = MakeEmpty();
+        static Geometry MakeEmpty() { var g = new StreamGeometry(); g.Freeze(); return g; }
+
+        // Carte non affichée (fenêtre cachée/réduite, autre onglet) : l'historique continue d'être alimenté,
+        // mais ni recalcul du rendu ni notification ; tout est rafraîchi d'un coup au retour (SetLive(true)).
+        bool _quiet, _dirty;
+        protected override void Raise([CallerMemberName] string n = null) { if (_quiet) { _dirty = true; return; } base.Raise(n); }
+        public void SetLive(bool live)
+        {
+            if (live != _quiet) return;          // déjà dans cet état
+            if (!live) { _quiet = true; return; }
+            if (_dirty && _count > 0) Rebuild();   // encore silencieux : les notifications sont remplacées par la notification globale
+            _quiet = false;
+            if (_dirty) { _dirty = false; base.Raise(string.Empty); }
+        }
+        /// <summary>Recalcule le rendu (ex. changement de thème) ; différé si la carte n'est pas affichée.</summary>
+        public void Invalidate() => Refresh();
+
         readonly Rule _rule; readonly Action _save;
         readonly double _fixedMax;
 
@@ -66,15 +101,16 @@ namespace PerfMonitorLive.UI
         public Brush TrendBrush { get => _trendBrush; set => Set(ref _trendBrush, value); } Brush _trendBrush = Palette.B(Palette.Muted);
         public Brush TrendBg { get => _trendBg; set => Set(ref _trendBg, value); } Brush _trendBg = Brushes.Transparent;
 
-        // Jauge (métriques en %)
-        public double GaugeWidth { get => _gauge; set => Set(ref _gauge, value); } double _gauge;
+        // Jauge (métriques en %) : découpe (Clip) arrondie d'une barre pleine largeur → rendu seul, pas d'invalidation de layout
+        public Geometry GaugeClip { get => _gaugeClip; set => Set(ref _gaugeClip, value); } Geometry _gaugeClip = EmptyGeom;
+        double _gaugeW = 0;
         public Visibility GaugeVisible => IsPercent ? Visibility.Visible : Visibility.Collapsed;
 
         // Géométries du mini-graphique
-        public Geometry AreaGeom { get => _area; set => Set(ref _area, value); } Geometry _area = Geometry.Empty;
-        public Geometry FlatGeom { get => _flat; set => Set(ref _flat, value); } Geometry _flat = Geometry.Empty;
-        public Geometry UpGeom { get => _up; set => Set(ref _up, value); } Geometry _up = Geometry.Empty;
-        public Geometry DownGeom { get => _down; set => Set(ref _down, value); } Geometry _down = Geometry.Empty;
+        public Geometry AreaGeom { get => _area; set => Set(ref _area, value); } Geometry _area = EmptyGeom;
+        public Geometry FlatGeom { get => _flat; set => Set(ref _flat, value); } Geometry _flat = EmptyGeom;
+        public Geometry UpGeom { get => _up; set => Set(ref _up, value); } Geometry _up = EmptyGeom;
+        public Geometry DownGeom { get => _down; set => Set(ref _down, value); } Geometry _down = EmptyGeom;
         public double ThresholdY { get => _thrY; set => Set(ref _thrY, value); } double _thrY = -10;
         public Visibility ThresholdVisible => HasRule && Enabled ? Visibility.Visible : Visibility.Collapsed;
 
@@ -91,23 +127,26 @@ namespace PerfMonitorLive.UI
         }
 
         double? _last;
-        void Refresh() { if (_hist.Count > 0) Rebuild(); }
+        void Refresh() { if (_count == 0) return; if (_quiet) _dirty = true; else Rebuild(); }
 
-        /// <summary>Ajoute une valeur et recalcule couleurs, tendance et mini-graphique.</summary>
+        /// <summary>Ajoute une valeur et recalcule couleurs, tendance et mini-graphique (recalcul différé si la carte n'est pas affichée).</summary>
         public void Push(double? v)
         {
             _last = v;
-            _hist.Enqueue(v ?? double.NaN);
-            while (_hist.Count > HistoryLen) _hist.Dequeue();
-            Rebuild();
+            _buf[_head] = v ?? double.NaN;
+            _head = (_head + 1) % HistoryLen;
+            if (_count < HistoryLen) _count++;
+            if (_quiet) _dirty = true; else Rebuild();
         }
 
         void Rebuild()
         {
-            var arr = _hist.ToArray();
-            var valid = arr.Where(x => !double.IsNaN(x)).ToArray();
+            int n = _count;
+            // une passe : nombre de valeurs valides et maximum
+            int valid = 0; double vmax = double.NegativeInfinity;
+            for (int i = 0; i < n; i++) { double x = At(i); if (double.IsNaN(x)) continue; valid++; if (x > vmax) vmax = x; }
             double max = _fixedMax;
-            if (max <= 0) { max = valid.DefaultIfEmpty(0).Max(); if (_rule != null && _rule.Enabled) max = Math.Max(max, _rule.Threshold); max = max <= 0 ? 1 : max * 1.15; }
+            if (max <= 0) { max = valid > 0 ? vmax : 0; if (_rule != null && _rule.Enabled) max = Math.Max(max, _rule.Threshold); max = max <= 0 ? 1 : max * 1.15; }
 
             // --- couleur de niveau
             Color level = Palette.Neutral;
@@ -119,13 +158,21 @@ namespace PerfMonitorLive.UI
             else if (_last.HasValue && IsPercent) level = _last.Value >= 90 ? Palette.Bad : _last.Value >= 70 ? Palette.Warn : Palette.Good;
             LevelBrush = Palette.B(level); LevelSoft = Palette.B(level, 0x2E);
             CardBorder = IsAlert ? Palette.B(Palette.Bad, 0xAA) : Palette.B(Palette.Grid);
-            GaugeWidth = IsPercent && _last.HasValue ? Math.Max(0, Math.Min(1, _last.Value / 100)) * W : 0;
+            double gw = IsPercent && _last.HasValue ? Math.Max(0, Math.Min(1, _last.Value / 100)) * W : 0;
+            if (double.IsNaN(gw)) gw = 0;
+            gw = Math.Round(gw);   // au pixel, comme l'arrondi de layout de l'ancienne Width : pas de nouvelle découpe pour un écart invisible
+            if (gw != _gaugeW)
+            {
+                _gaugeW = gw;
+                if (gw <= 0) GaugeClip = EmptyGeom;
+                else { var clip = new RectangleGeometry(new Rect(0, 0, gw, 6), 3, 3); clip.Freeze(); GaugeClip = clip; }
+            }
 
             // --- tendance sur 30 s
-            if (valid.Length >= 2 && _last.HasValue)
+            if (valid >= 2 && _last.HasValue)
             {
-                int back = Math.Min(30, arr.Length - 1);
-                double prev = double.NaN; for (int i = arr.Length - 1 - back; i < arr.Length - 1 && double.IsNaN(prev); i++) if (i >= 0) prev = arr[i];
+                int back = Math.Min(30, n - 1);
+                double prev = double.NaN; for (int i = n - 1 - back; i < n - 1 && double.IsNaN(prev); i++) if (i >= 0) prev = At(i);
                 if (!double.IsNaN(prev))
                 {
                     double d = _last.Value - prev, sig = max * 0.05; // variation notable = 5 % de l'échelle
@@ -142,39 +189,55 @@ namespace PerfMonitorLive.UI
             }
 
             // --- géométries : aire + segments colorés selon la pente locale
-            var pts = new List<Point>(); var idx = new List<int>();
-            for (int i = 0; i < arr.Length; i++)
+            int m = 0; double step = W / (HistoryLen - 1);
+            for (int i = 0; i < n; i++)
             {
-                if (double.IsNaN(arr[i])) continue;
-                double x = W - (arr.Length - 1 - i) * (W / (HistoryLen - 1));
-                double y = H - Math.Min(arr[i], max) / max * (H - 4) - 2;
-                pts.Add(new Point(x, y)); idx.Add(i);
+                double v = At(i);
+                if (double.IsNaN(v)) continue;
+                _pts[m] = new Point(W - (n - 1 - i) * step, H - Math.Min(v, max) / max * (H - 4) - 2);
+                _idx[m] = i; m++;
             }
-            var area = new StreamGeometry(); var flat = new StreamGeometry(); var up_ = new StreamGeometry(); var down = new StreamGeometry();
-            if (pts.Count >= 2)
+            if (m >= 2)
             {
+                var area = new StreamGeometry(); var flat = new StreamGeometry(); var up_ = new StreamGeometry(); var down = new StreamGeometry();
                 using (var g = area.Open())
                 {
-                    g.BeginFigure(new Point(pts[0].X, H), true, true);
-                    foreach (var p in pts) g.LineTo(p, false, false);
-                    g.LineTo(new Point(pts[pts.Count - 1].X, H), false, false);
+                    g.BeginFigure(new Point(_pts[0].X, H), true, true);
+                    g.PolyLineTo(new ArraySegment<Point>(_pts, 0, m), false, false);
+                    g.LineTo(new Point(_pts[m - 1].X, H), false, false);
                 }
                 double jump = max * (_fixedMax > 0 ? 0.12 : 0.30); // « brusque » = 12 % de l'échelle (métriques en %) ou 30 % (échelle dynamique) en ~5 s
                 using (var gf = flat.Open()) using (var gu = up_.Open()) using (var gd = down.Open())
                 {
-                    for (int k = 1; k < pts.Count; k++)
+                    // Les segments consécutifs de même couleur forment une seule figure (jointures rondes = mêmes pixels
+                    // que des segments séparés à extrémités rondes).
+                    int runColor = -1, runStart = 0;
+                    for (int k = 1; k < m; k++)
                     {
-                        int i = idx[k]; double d = 0; int j = i - 5; if (j < 0) j = 0;
-                        while (j < i && double.IsNaN(arr[j])) j++;
-                        if (j < i) d = arr[i] - arr[j];
-                        var g = d >= jump ? gu : d <= -jump ? gd : gf;
-                        g.BeginFigure(pts[k - 1], false, false); g.LineTo(pts[k], true, true);
+                        int i = _idx[k]; double d = 0; int j = i - 5; if (j < 0) j = 0;
+                        while (j < i && double.IsNaN(At(j))) j++;
+                        if (j < i) d = At(i) - At(j);
+                        int c = d >= jump ? 1 : d <= -jump ? 2 : 0;
+                        if (c != runColor)
+                        {
+                            if (runColor >= 0) Figure(runColor == 1 ? gu : runColor == 2 ? gd : gf, runStart, k - 1);
+                            runColor = c; runStart = k - 1;
+                        }
                     }
+                    if (runColor >= 0) Figure(runColor == 1 ? gu : runColor == 2 ? gd : gf, runStart, m - 1);
                 }
+                area.Freeze(); flat.Freeze(); up_.Freeze(); down.Freeze();
+                AreaGeom = area; FlatGeom = flat; UpGeom = up_; DownGeom = down;
             }
-            area.Freeze(); flat.Freeze(); up_.Freeze(); down.Freeze();
-            AreaGeom = area; FlatGeom = flat; UpGeom = up_; DownGeom = down;
+            else { AreaGeom = EmptyGeom; FlatGeom = EmptyGeom; UpGeom = EmptyGeom; DownGeom = EmptyGeom; }
             ThresholdY = _rule != null && _rule.Enabled ? H - Math.Min(_rule.Threshold, max) / max * (H - 4) - 2 : -10;
+        }
+
+        /// <summary>Polyligne des points [from..to] (to &gt; from).</summary>
+        void Figure(StreamGeometryContext g, int from, int to)
+        {
+            g.BeginFigure(_pts[from], false, false);
+            g.PolyLineTo(new ArraySegment<Point>(_pts, from + 1, to - from), true, false);
         }
     }
 

@@ -54,7 +54,10 @@ namespace PerfMonitorLive.Metrics
 
     public class Sample
     {
-        public string ts { get; set; }
+        /// <summary>Horodatage sérialisé. Formaté à la première lecture depuis <see cref="Time"/> (en pratique : à l'écriture
+        /// de l'historique, une mesure sur cinq), plutôt qu'à chaque mesure sur le thread de mesure.</summary>
+        public string ts { get => _ts ??= Time == default ? null : Time.ToString("yyyy-MM-ddTHH:mm:ss"); set => _ts = value; }
+        string _ts;
         public double cpu { get; set; }
         public double memMB { get; set; }
         public double memPct { get; set; }

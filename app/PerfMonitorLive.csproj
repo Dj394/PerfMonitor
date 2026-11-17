@@ -17,6 +17,10 @@
     <Company>Didier Sogoyou</Company>
     <NoWarn>CA1416;WFO0003</NoWarn>
     <ApplicationIcon>app.ico</ApplicationIcon>
+    <!-- Appli résidente : pas de thread GC d'arrière-plan (RAM et threads en moins), pas d'instrumentation PGO
+         pendant le démarrage (le JIT par paliers reste actif). -->
+    <ConcurrentGarbageCollection>false</ConcurrentGarbageCollection>
+    <TieredPGO>false</TieredPGO>
   </PropertyGroup>
   <ItemGroup>
     <Resource Include="app-icon.png" />
