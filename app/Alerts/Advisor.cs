@@ -29,6 +29,9 @@ namespace PerfMonitorLive.Alerts
             public double Span => _q.Count < 2 ? 0 : (_q.Last().Key - _q.Peek().Key).TotalMinutes;
         }
         readonly Dictionary<string, Series> _s = new Dictionary<string, Series>();
+        // clés « préfixe + nom de disque » mémorisées : OnSample tournait avec une concaténation par disque et par série à chaque mesure
+        readonly Dictionary<string, string> _kPct = new Dictionary<string, string>(), _kLat = new Dictionary<string, string>(), _kQ = new Dictionary<string, string>(), _kStor = new Dictionary<string, string>();
+        static string K(Dictionary<string, string> cache, string prefix, string n) { n = n ?? ""; if (!cache.TryGetValue(n, out var k)) cache[n] = k = prefix + n; return k; }
         Series S(string k) { if (!_s.TryGetValue(k, out var s)) _s[k] = s = new Series(); return s; }
         Sample _last;
         readonly Dictionary<string, DateTime> _lastShown = new Dictionary<string, DateTime>();
@@ -47,8 +50,8 @@ namespace PerfMonitorLive.Alerts
             if (s.temp.HasValue) S("temp").Add(t, s.temp.Value);
             if (s.gpu.HasValue) S("gpu").Add(t, s.gpu.Value);
             S("rx").Add(t, s.rx / 1024); S("tx").Add(t, s.tx / 1024);
-            foreach (var d in s.disks) { S("dpct:" + d.n).Add(t, d.pct); S("dlat:" + d.n).Add(t, d.lat); S("dq:" + d.n).Add(t, d.q); }
-            foreach (var st in s.stor) S("stor:" + st.n).Add(t, st.t);
+            foreach (var d in s.disks) { S(K(_kPct, "dpct:", d.n)).Add(t, d.pct); S(K(_kLat, "dlat:", d.n)).Add(t, d.lat); S(K(_kQ, "dq:", d.n)).Add(t, d.q); }
+            foreach (var st in s.stor) S(K(_kStor, "stor:", st.n)).Add(t, st.t);
         }
 
         static string Fmt(double v, string u) => double.IsNaN(v) ? "?" : Math.Round(v) + " " + u;
@@ -147,7 +150,7 @@ namespace PerfMonitorLive.Alerts
             // --- Disques (perf) : seuils selon le type (NVMe / SSD / HDD / USB)
             foreach (var d in s.disks)
             {
-                double lat = S("dlat:" + d.n).Avg(3), pct = S("dpct:" + d.n).Avg(3), q = S("dq:" + d.n).Avg(3);
+                double lat = S(K(_kLat, "dlat:", d.n)).Avg(3), pct = S(K(_kPct, "dpct:", d.n)).Avg(3), q = S(K(_kQ, "dq:", d.n)).Avg(3);
                 var info = M.DiskByPerfName(d.n); var kind = info?.Kind ?? DiskKind.Unknown;
                 var lbl = DiskLabel(d.n, info);
                 double latThr = kind == DiskKind.Nvme ? 20 : kind == DiskKind.Ssd ? 30 : kind == DiskKind.Hdd || kind == DiskKind.Usb ? 100 : 40;
@@ -165,7 +168,7 @@ namespace PerfMonitorLive.Alerts
             // --- Disques (température SMART)
             foreach (var st in s.stor)
             {
-                double t = S("stor:" + st.n).Avg(3);
+                double t = S(K(_kStor, "stor:", st.n)).Avg(3);
                 var info = M.DiskByStorName(st.n); bool hdd = info != null && info.Kind == DiskKind.Hdd;
                 double thr = hdd ? 50 : 60;
                 if (!double.IsNaN(t) && t >= thr)

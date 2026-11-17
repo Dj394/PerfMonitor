@@ -40,6 +40,13 @@ namespace PerfMonitorLive.UI
             GC.Collect(GC.MaxGeneration, GCCollectionMode.Aggressive, true, true);
         }
 
+        /// <summary>Thème changé : les graphiques (dessinés à la main, sans ressource dynamique) relisent leurs couleurs.</summary>
+        public void ThemeChanged()
+        {
+            foreach (var c in _charts) c.ThemeChanged();
+            BootBars?.InvalidateVisual();
+        }
+
         /// <summary>Déclare les métriques disponibles (mêmes clés que les cartes).</summary>
         public void SetMetrics(IEnumerable<MetricDef> defs)
         {
@@ -171,35 +178,56 @@ namespace PerfMonitorLive.UI
         public HistoryView.MetricDef Def;
         List<Bucket> _b = new List<Bucket>(); List<Note> _notes = new List<Note>(); List<Sample> _samples = new List<Sample>();
         DateTime _f, _t; Point? _hover; bool _drag; Point _dragStart; DateTime _dragF, _dragT;
+        double _yMax = 1;   // échelle verticale, recalculée avec _b (pas à chaque rendu ni à chaque survol)
         public event Action<DateTime, DateTime> ViewChanged;
-        static readonly Typeface Face = new Typeface("Segoe UI");
         const double L = 52, R = 12, T = 26, B = 22;
 
-        public HistoryChart() { ClipToBounds = true; Cursor = Cursors.Cross; }
+        // Polices et stylos fixes, créés une fois (gelés). Les stylos à couleur de thème sont refaits à chaque rendu complet (rare).
+        static readonly Typeface FaceNormal = new Typeface(new FontFamily("Segoe UI"), FontStyles.Normal, FontWeights.Normal, FontStretches.Normal);
+        static readonly Typeface FaceSemiBold = new Typeface(new FontFamily("Segoe UI"), FontStyles.Normal, FontWeights.SemiBold, FontStretches.Normal);
+        static Pen Frozen(Pen p) { p.Freeze(); return p; }
+        static readonly Pen MaxPen = Frozen(new Pen(Palette.B(Palette.Bad, 0x70), 1));
+        static readonly Pen AvgPen = Frozen(new Pen(Palette.B(Palette.Neutral), 1.6) { LineJoin = PenLineJoin.Round });
+        static readonly Pen NotePen = Frozen(new Pen(Palette.B(Palette.Warn), 1) { DashStyle = DashStyles.Dash });
+
+        // Couche de survol (réticule + infobulle) : un DrawingVisual enfant, redessiné seul. Le graphique lui-même (OnRender)
+        // n'est plus invalidé par le simple mouvement de la souris.
+        readonly DrawingVisual _hoverVisual = new DrawingVisual();
+        int _hoverIdx = -1;
+        Brush _fg, _muted, _panel2;   // pinceaux de thème relevés au dernier rendu complet
+        Pen _cursorPen; Brush _cursorPenBrush;
+
+        public HistoryChart() { ClipToBounds = true; Cursor = Cursors.Cross; AddVisualChild(_hoverVisual); }
+        protected override int VisualChildrenCount => 1;
+        protected override Visual GetVisualChild(int index) { if (index != 0) throw new ArgumentOutOfRangeException(nameof(index)); return _hoverVisual; }
+
         public void SetData(List<Sample> samples, List<Note> notes, DateTime f, DateTime t) { _samples = samples; _notes = notes; SetView(f, t); }
-        public void Release() { _samples = new List<Sample>(); _notes = new List<Note>(); _b = new List<Bucket>(); InvalidateVisual(); }
+        public void Release() { _samples = new List<Sample>(); _notes = new List<Note>(); _b = new List<Bucket>(); _yMax = 1; InvalidateVisual(); UpdateHover(true); }
         public void SetView(DateTime f, DateTime t)
         {
             _f = f; _t = t;
             int step = HistoryReader.StepFor(t - f);
             _b = HistoryReader.Aggregate(_samples.Where(s => s.Time >= f && s.Time <= t), Def.Key, step);
+            _yMax = Def.FixedMax > 0 ? Def.FixedMax : Math.Max(1, (_b.Count == 0 ? 0 : MaxOf(_b)) * 1.1);
             InvalidateVisual();
+            UpdateHover(true);
         }
+        static double MaxOf(List<Bucket> b) { double m = b[0].Max; for (int i = 1; i < b.Count; i++) if (b[i].Max > m) m = b[i].Max; return m; }
 
         Brush Res(string k) => (Brush)(TryFindResource(k) ?? Brushes.Gray);
         protected override void OnRender(DrawingContext dc)
         {
             double W = ActualWidth, H = ActualHeight; if (W < 60 || H < 40) return;
-            dc.DrawRoundedRectangle(Res("PanelBrush"), new Pen(Res("GridBrush"), 1), new Rect(0.5, 0.5, W - 1, H - 1), 12, 12);
+            var gridPen = new Pen(Res("GridBrush"), 1);
+            dc.DrawRoundedRectangle(Res("PanelBrush"), gridPen, new Rect(0.5, 0.5, W - 1, H - 1), 12, 12);
             double w = W - L - R, h = H - T - B;
-            var fg = Res("FgBrush"); var muted = Res("MutedBrush");
+            var fg = _fg = Res("FgBrush"); var muted = _muted = Res("MutedBrush"); _panel2 = Res("Panel2Brush");
             dc.DrawText(Text(Def.Title, 12.5, fg, FontWeights.SemiBold), new Point(14, 6));
             if (_b.Count == 0) { dc.DrawText(Text("Aucune donnée sur la plage", 12, muted), new Point(L, T + h / 2)); return; }
-            double max = Def.FixedMax > 0 ? Def.FixedMax : Math.Max(1, _b.Max(x => x.Max) * 1.1);
+            double max = _yMax;
             double span = (_t - _f).TotalSeconds; if (span <= 0) span = 1;
             double X(DateTime d) => L + (d - _f).TotalSeconds / span * w;
             double Y(double v) => T + h - Math.Min(v, max) / max * h;
-            var gridPen = new Pen(Res("GridBrush"), 1);
             for (int i = 0; i <= 4; i++)
             {
                 double y = T + h * i / 4; dc.DrawLine(gridPen, new Point(L, y), new Point(W - R, y));
@@ -215,6 +243,7 @@ namespace PerfMonitorLive.UI
             // aire moyenne + ligne max
             var accent = Palette.Neutral;
             var area = new StreamGeometry(); var line = new StreamGeometry(); var maxLine = new StreamGeometry();
+            double gap = HistoryReader.StepFor(_t - _f) * 4;
             using (var ga = area.Open()) using (var gl = line.Open()) using (var gm = maxLine.Open())
             {
                 bool first = true;
@@ -225,57 +254,100 @@ namespace PerfMonitorLive.UI
                     else
                     {
                         // trou de données > 3 pas : on coupe
-                        if ((_b[i].T - _b[i - 1].T).TotalSeconds > HistoryReader.StepFor(_t - _f) * 4) { ga.LineTo(new Point(X(_b[i - 1].T), T + h), false, false); ga.LineTo(new Point(p.X, T + h), false, false); gl.BeginFigure(p, false, false); gm.BeginFigure(pm, false, false); }
+                        if ((_b[i].T - _b[i - 1].T).TotalSeconds > gap) { ga.LineTo(new Point(X(_b[i - 1].T), T + h), false, false); ga.LineTo(new Point(p.X, T + h), false, false); gl.BeginFigure(p, false, false); gm.BeginFigure(pm, false, false); }
                         else { gl.LineTo(p, true, true); gm.LineTo(pm, true, true); }
                         ga.LineTo(p, false, false);
                     }
                 }
                 ga.LineTo(new Point(X(_b[_b.Count - 1].T), T + h), false, false);
             }
+            area.Freeze(); line.Freeze(); maxLine.Freeze();
             dc.PushClip(new RectangleGeometry(new Rect(L, T, w, h)));
             dc.DrawGeometry(Palette.B(accent, 0x2A), null, area);
-            dc.DrawGeometry(null, new Pen(Palette.B(Palette.Bad, 0x70), 1), maxLine);
-            dc.DrawGeometry(null, new Pen(Palette.B(accent), 1.6) { LineJoin = PenLineJoin.Round }, line);
+            dc.DrawGeometry(null, MaxPen, maxLine);
+            dc.DrawGeometry(null, AvgPen, line);
             // marqueurs
-            var mpen = new Pen(Palette.B(Palette.Warn), 1) { DashStyle = DashStyles.Dash };
-            foreach (var n in _notes.Where(n => n.Time >= _f && n.Time <= _t))
+            foreach (var n in _notes)
             {
-                double x = X(n.Time); dc.DrawLine(mpen, new Point(x, T), new Point(x, T + h));
+                if (n.Time < _f || n.Time > _t) continue;
+                double x = X(n.Time); dc.DrawLine(NotePen, new Point(x, T), new Point(x, T + h));
                 dc.DrawText(Text(n.text.Length > 24 ? n.text.Substring(0, 23) + "…" : n.text, 10, Palette.B(Palette.Warn)), new Point(x + 3, T + 2));
-            }
-            // curseur
-            if (_hover.HasValue && _hover.Value.X >= L && _hover.Value.X <= W - R)
-            {
-                var d = _f.AddSeconds((_hover.Value.X - L) / w * span);
-                var nb = _b.OrderBy(x => Math.Abs((x.T - d).TotalSeconds)).First();
-                double x = X(nb.T);
-                dc.DrawLine(new Pen(muted, 1) { DashStyle = DashStyles.Dot }, new Point(x, T), new Point(x, T + h));
-                dc.DrawEllipse(Palette.B(accent), null, new Point(x, Y(nb.Avg)), 3.5, 3.5);
-                var txt = Text(nb.T.ToString("dd/MM HH:mm") + "  moy " + FmtV(nb.Avg, Def.Unit) + "  max " + FmtV(nb.Max, Def.Unit), 11, fg, FontWeights.SemiBold);
-                double bx = Math.Min(W - R - txt.Width - 12, x + 8);
-                dc.DrawRoundedRectangle(Res("Panel2Brush"), null, new Rect(bx, T + 4, txt.Width + 12, txt.Height + 6), 6, 6);
-                dc.DrawText(txt, new Point(bx + 6, T + 7));
             }
             dc.Pop();
             var lg = Text("moyenne", 10, Palette.B(accent)); dc.DrawText(lg, new Point(W - R - 120, 8));
             dc.DrawText(Text("max", 10, Palette.B(Palette.Bad, 0xB0)), new Point(W - R - 40, 8));
         }
+
+        /// <summary>Redessine la seule couche de survol : trait vertical sur le point agrégé le plus proche, pastille et infobulle.
+        /// Sans effet si le survol retombe sur le même point (rien à changer à l'écran), sauf si <paramref name="force"/>
+        /// (vue, taille ou données modifiées).</summary>
+        void UpdateHover(bool force)
+        {
+            double W = ActualWidth, H = ActualHeight;
+            double w = W - L - R, h = H - T - B;
+            double span = (_t - _f).TotalSeconds; if (span <= 0) span = 1;
+            int idx = -1;
+            if (_hover.HasValue && _b.Count > 0 && W >= 60 && H >= 40 && _hover.Value.X >= L && _hover.Value.X <= W - R)
+            {
+                var d = _f.AddSeconds((_hover.Value.X - L) / w * span);
+                double best = double.MaxValue;
+                for (int i = 0; i < _b.Count; i++)
+                {
+                    double dd = Math.Abs((_b[i].T - d).TotalSeconds);
+                    if (dd < best) { best = dd; idx = i; }   // en cas d'égalité, le premier (comme OrderBy().First())
+                }
+            }
+            if (!force && idx == _hoverIdx) return;
+            _hoverIdx = idx;
+            using (var dc = _hoverVisual.RenderOpen())
+            {
+                if (idx < 0) return;
+                double max = _yMax;
+                var fg = _fg ?? Res("FgBrush"); var muted = _muted ?? Res("MutedBrush"); var panel2 = _panel2 ?? Res("Panel2Brush");
+                var nb = _b[idx];
+                double x = L + (nb.T - _f).TotalSeconds / span * w;
+                double y = T + h - Math.Min(nb.Avg, max) / max * h;
+                dc.PushClip(new RectangleGeometry(new Rect(L, T, w, h)));
+                if (_cursorPen == null || !ReferenceEquals(_cursorPenBrush, muted))
+                {
+                    _cursorPen = new Pen(muted, 1) { DashStyle = DashStyles.Dot }; _cursorPenBrush = muted;
+                    if (_cursorPen.CanFreeze) _cursorPen.Freeze();
+                }
+                dc.DrawLine(_cursorPen, new Point(x, T), new Point(x, T + h));
+                dc.DrawEllipse(Palette.B(Palette.Neutral), null, new Point(x, y), 3.5, 3.5);
+                var txt = Text(nb.T.ToString("dd/MM HH:mm") + "  moy " + FmtV(nb.Avg, Def.Unit) + "  max " + FmtV(nb.Max, Def.Unit), 11, fg, FontWeights.SemiBold);
+                double bx = Math.Min(W - R - txt.Width - 12, x + 8);
+                dc.DrawRoundedRectangle(panel2, null, new Rect(bx, T + 4, txt.Width + 12, txt.Height + 6), 6, 6);
+                dc.DrawText(txt, new Point(bx + 6, T + 7));
+                dc.Pop();
+            }
+        }
+        protected override void OnRenderSizeChanged(SizeChangedInfo sizeInfo) { base.OnRenderSizeChanged(sizeInfo); UpdateHover(true); }
+        /// <summary>Thème changé : pinceaux relus (le calque de survol ne doit pas garder ceux de l'ancien thème), rendu complet et survol redessinés.</summary>
+        public void ThemeChanged()
+        {
+            _fg = Res("FgBrush"); _muted = Res("MutedBrush"); _panel2 = Res("Panel2Brush");
+            InvalidateVisual();
+            UpdateHover(true);
+        }
+
         static string FmtV(double v, string u) => u == "%" ? Math.Round(v) + " %" : (v < 10 ? v.ToString("0.0") : v.ToString("0")) + " " + u;
-        FormattedText Text(string s, double size, Brush b, FontWeight? w = null) => new FormattedText(s, CultureInfo.CurrentCulture, FlowDirection.LeftToRight, new Typeface(new FontFamily("Segoe UI"), FontStyles.Normal, w ?? FontWeights.Normal, FontStretches.Normal), size, b, VisualTreeHelper.GetDpi(this).PixelsPerDip);
+        FormattedText Text(string s, double size, Brush b, FontWeight? w = null) => new FormattedText(s, CultureInfo.CurrentCulture, FlowDirection.LeftToRight, w.HasValue && w.Value == FontWeights.SemiBold ? FaceSemiBold : FaceNormal, size, b, VisualTreeHelper.GetDpi(this).PixelsPerDip);
 
         protected override void OnMouseMove(MouseEventArgs e)
         {
             var p = e.GetPosition(this);
+            _hover = p;
             if (_drag && e.LeftButton == MouseButtonState.Pressed)
             {
                 double w = ActualWidth - L - R; var span = (_dragT - _dragF).TotalSeconds;
                 double dx = (p.X - _dragStart.X) / w * span;
                 _f = _dragF.AddSeconds(-dx); _t = _dragT.AddSeconds(-dx);
-                SetView(_f, _t); ViewChanged?.Invoke(_f, _t);
+                SetView(_f, _t); ViewChanged?.Invoke(_f, _t);   // SetView redessine aussi la couche de survol
             }
-            _hover = p; InvalidateVisual();
+            else UpdateHover(false);
         }
-        protected override void OnMouseLeave(MouseEventArgs e) { _hover = null; _drag = false; InvalidateVisual(); }
+        protected override void OnMouseLeave(MouseEventArgs e) { _hover = null; _drag = false; UpdateHover(false); }
         protected override void OnMouseLeftButtonDown(MouseButtonEventArgs e) { _drag = true; _dragStart = e.GetPosition(this); _dragF = _f; _dragT = _t; CaptureMouse(); }
         protected override void OnMouseLeftButtonUp(MouseButtonEventArgs e) { _drag = false; ReleaseMouseCapture(); }
         protected override void OnMouseWheel(MouseWheelEventArgs e)

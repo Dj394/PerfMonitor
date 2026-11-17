@@ -10,13 +10,17 @@
     <RootNamespace>PerfMonitorLive</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
-    <Version>3.1.1</Version>
-    <AssemblyVersion>3.1.1</AssemblyVersion>
-    <FileVersion>3.1.1</FileVersion>
+    <Version>3.2.0</Version>
+    <AssemblyVersion>3.2.0</AssemblyVersion>
+    <FileVersion>3.2.0</FileVersion>
     <Product>PerfMonitor Live</Product>
     <Company>Didier Sogoyou</Company>
     <NoWarn>CA1416;WFO0003</NoWarn>
     <ApplicationIcon>app.ico</ApplicationIcon>
+    <!-- Appli résidente : pas de thread GC d'arrière-plan (RAM et threads en moins), pas d'instrumentation PGO
+         pendant le démarrage (le JIT par paliers reste actif). -->
+    <ConcurrentGarbageCollection>false</ConcurrentGarbageCollection>
+    <TieredPGO>false</TieredPGO>
   </PropertyGroup>
   <ItemGroup>
     <Resource Include="app-icon.png" />
@@ -24,6 +28,7 @@
   <ItemGroup>
     <PackageReference Include="System.Management" Version="10.0.2" />
     <PackageReference Include="LibreHardwareMonitorLib" Version="0.9.6" />
+    <PackageReference Include="Microsoft.Diagnostics.Tracing.TraceEvent" Version="3.2.6" />
   </ItemGroup>
 </Project>
 

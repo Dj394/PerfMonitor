@@ -40,6 +40,11 @@ namespace PerfMonitorLive.Metrics
         [JsonIgnore] public string HealthText => health == 0 ? "OK" : health == 1 ? "Avertissement" : "Défaillant";
     }
     public class FanSample { public string n { get; set; } public int rpm { get; set; } }
+    /// <summary>Tension d'un rail lue par le Super I/O de la carte mere (Volts).
+    /// Mesure indirecte : la carte mere ecoute le rail, l'alimentation elle-meme ne dit rien.
+    /// Precision de l'ordre de +/-5 % et cadence 1 Hz : utile pour voir un affaissement lent
+    /// sous charge, incapable de voir un pic transitoire de quelques microsecondes.</summary>
+    public class VoltSample { public string n { get; set; } public double v { get; set; } }
 
     /// <summary>Fuite détectée sur un processus (calculée toutes les 60 s, non écrite dans l'historique).</summary>
     public class LeakInfo
@@ -49,7 +54,10 @@ namespace PerfMonitorLive.Metrics
 
     public class Sample
     {
-        public string ts { get; set; }
+        /// <summary>Horodatage sérialisé. Formaté à la première lecture depuis <see cref="Time"/> (en pratique : à l'écriture
+        /// de l'historique, une mesure sur cinq), plutôt qu'à chaque mesure sur le thread de mesure.</summary>
+        public string ts { get => _ts ??= Time == default ? null : Time.ToString("yyyy-MM-ddTHH:mm:ss"); set => _ts = value; }
+        string _ts;
         public double cpu { get; set; }
         public double memMB { get; set; }
         public double memPct { get; set; }
@@ -64,8 +72,13 @@ namespace PerfMonitorLive.Metrics
         public double? gpuMHz { get; set; }
         public double? cpuW { get; set; }
         public double? gpuW { get; set; }
+        public double? fps { get; set; }      // images par seconde du jeu au premier plan (ETW/DXGI)
         public List<FanSample> fans { get; set; } = new List<FanSample>();
         public List<StorSample> stor { get; set; } = new List<StorSample>();
+        public double? v12 { get; set; }      // rail +12 V (alimentation du CPU et de la carte graphique)
+        public double? v5 { get; set; }
+        public double? v33 { get; set; }
+        public List<VoltSample> volts { get; set; } = new List<VoltSample>();
         public RebootInfo rb { get; set; }
         public double? bat { get; set; }      // % batterie (portables)
         public bool? ac { get; set; }         // sur secteur
@@ -86,5 +99,6 @@ namespace PerfMonitorLive.Metrics
         public DiskSample Disk(string name) { foreach (var d in disks) if (d.n == name) return d; return null; }
         public StorSample Stor(string name) { foreach (var d in stor) if (d.n == name) return d; return null; }
         public FanSample Fan(string name) { foreach (var f in fans) if (f.n == name) return f; return null; }
+        public VoltSample Volt(string name) { foreach (var v in volts) if (v.n == name) return v; return null; }
     }
 }

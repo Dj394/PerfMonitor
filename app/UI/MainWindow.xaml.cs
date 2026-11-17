@@ -3,9 +3,12 @@ using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Globalization;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
+using System.Windows.Media;
+using System.Windows.Threading;
 using PerfMonitorLive.Metrics;
 using WF = System.Windows.Forms;
 
@@ -62,14 +65,15 @@ namespace PerfMonitorLive.UI
         {
             InitializeComponent();
             _app = app;
-            Cards.ItemsSource = _cards;
-            Procs.ItemsSource = _procs;
+            // Cards/Procs.ItemsSource : branchés à l'affichage, débranchés au masquage (voir OnVisibleChanged)
             _svm = new SettingsVm(app.Settings, app.OnSettingsChanged);
             RefreshScreens();
             SettingsPanel.DataContext = _svm;
             BuildFixedCards();
-            Closing += (s, e) => { if (!_reallyClose) { e.Cancel = true; Hide(); History?.Release(); } };
-            IsVisibleChanged += (s, e) => { if (IsVisible) { RefreshScreens(); UpdatePauseText(); UpdateProfilePill(); } };
+            Closing += (s, e) => { if (!_reallyClose) { e.Cancel = true; Hide(); } };   // le ménage est fait par OnVisibleChanged
+            IsVisibleChanged += (s, e) => OnVisibleChanged();
+            Tabs.SelectionChanged += Tabs_SelectionChanged;
+            Loaded += (s, e) => { ApplyBitmapCaches(VisualTreeHelper.GetDpi(this).DpiScaleX); UpdateLiveState(); };
             SourceInitialized += (s, e) => CenterOnPrimary();
             InitAdvisor();
             InitHistory();
@@ -80,6 +84,86 @@ namespace PerfMonitorLive.UI
 
         public void ForceClose() { _reallyClose = true; Close(); }
         public SettingsVm SettingsVm => _svm;
+
+        // ------------------------------------------------------------------ visibilité / économie
+        /// <summary>Fenêtre réellement à l'écran (IsVisible reste vrai quand elle est réduite).</summary>
+        bool WindowShown => IsVisible && WindowState != WindowState.Minimized;
+        /// <summary>Onglet Live affiché : seules ses cartes sont recalculées et notifiées.</summary>
+        bool LiveTabShown => WindowShown && ReferenceEquals(Tabs.SelectedItem, LiveTab);
+        bool ProcsTabShown => WindowShown && ReferenceEquals(Tabs.SelectedItem, ProcsTab);
+        bool _live;
+
+        /// <summary>Cartes : rendu actif ou en sommeil (l'historique continue d'être alimenté) ; mascotte animée ou figée.</summary>
+        void UpdateLiveState()
+        {
+            bool live = LiveTabShown;
+            if (live != _live) { _live = live; foreach (var c in _cards) c.SetLive(live); }
+            UpdateMascotAnim();
+        }
+
+        void OnVisibleChanged()
+        {
+            if (IsVisible)
+            {
+                UpdateLiveState();                      // reconstruit d'abord les cartes « sales »…
+                if (Cards.ItemsSource == null) Cards.ItemsSource = _cards;   // …puis rebranche l'affichage
+                if (Procs.ItemsSource == null) Procs.ItemsSource = _procs;
+                Relayout();
+                RefreshScreens(); UpdatePauseText(); UpdateProfilePill();
+                RefreshShown();
+                return;
+            }
+            if (_reallyClose) return;
+            // Masquée (fermeture → zone de notification, ou App.ToggleMain) : on rend le maximum de mémoire.
+            UpdateLiveState();
+            History?.Release();
+            Cards.ItemsSource = null; Procs.ItemsSource = null;   // les VM et leur historique restent
+            Dispatcher.BeginInvoke(new Action(TrimMemory), DispatcherPriority.ContextIdle);
+        }
+
+        /// <summary>Après masquage : GC compactant (LOH comprise) puis réduction du working set.</summary>
+        void TrimMemory()
+        {
+            if (IsVisible || _reallyClose) return;
+            try
+            {
+                System.Runtime.GCSettings.LargeObjectHeapCompactionMode = System.Runtime.GCLargeObjectHeapCompactionMode.CompactOnce;
+                GC.Collect(GC.MaxGeneration, GCCollectionMode.Aggressive, true, true);
+                SetProcessWorkingSetSize(GetCurrentProcess(), (IntPtr)(-1), (IntPtr)(-1));
+            }
+            catch (Exception ex) { Paths.Log("trim: " + ex.Message); }
+        }
+        [DllImport("kernel32.dll")] static extern IntPtr GetCurrentProcess();
+        [DllImport("kernel32.dll")] [return: MarshalAs(UnmanagedType.Bool)] static extern bool SetProcessWorkingSetSize(IntPtr process, IntPtr min, IntPtr max);
+
+        void Tabs_SelectionChanged(object s, SelectionChangedEventArgs e)
+        {
+            if (!ReferenceEquals(e.OriginalSource, Tabs)) return;   // SelectionChanged remonte aussi des ComboBox des onglets
+            UpdateLiveState();
+            if (ProcsTabShown && _lastSample != null) UpdateProcs(_lastSample);
+        }
+
+        /// <summary>Retour à l'écran (affichage, restauration) : en-tête et processus à jour sans attendre la mesure suivante.</summary>
+        void RefreshShown()
+        {
+            if (_lastSample == null || !WindowShown) return;
+            UpdateHeader(_lastSample);
+            if (ProcsTabShown) UpdateProcs(_lastSample);
+        }
+
+        /// <summary>Effets statiques (ombres, flou) mis en cache bitmap, rendus à la résolution de l'écran pour rester nets.</summary>
+        void ApplyBitmapCaches(double scale)
+        {
+            if (scale <= 0) scale = 1;
+            HeaderIcon.CacheMode = new BitmapCache(scale) { SnapsToDevicePixels = true };
+            Mascot.CacheMode = new BitmapCache(scale) { SnapsToDevicePixels = true };
+            Bubble.CacheMode = new BitmapCache(scale) { SnapsToDevicePixels = true, EnableClearType = true };
+        }
+        protected override void OnDpiChanged(DpiScale oldDpi, DpiScale newDpi)
+        {
+            base.OnDpiChanged(oldDpi, newDpi);
+            ApplyBitmapCaches(newDpi.DpiScaleX);
+        }
 
         void CenterOnPrimary()
         {
@@ -100,11 +184,12 @@ namespace PerfMonitorLive.UI
         }
 
         // ------------------------------------------------------------------ cartes
-        static readonly string[] CardOrder = { "cpu", "memPct", "temp", "gpuTemp", "cpuMHz", "gpuMHz", "cpuW", "gpuW", "bat", "rx", "tx", "pageIn", "reboot", "disk.", "stor.", "fan:" };
+        static readonly string[] CardOrder = { "cpu", "memPct", "temp", "gpuTemp", "cpuMHz", "gpuMHz", "cpuW", "gpuW", "fps", "v12", "v5", "v33", "bat", "rx", "tx", "pageIn", "reboot", "disk.", "stor.", "fan:" };
         static int Rank(string key) { for (int i = 0; i < CardOrder.Length; i++) if (key == CardOrder[i] || key.StartsWith(CardOrder[i]) && CardOrder[i].EndsWith(".") || key.StartsWith(CardOrder[i]) && CardOrder[i].EndsWith(":")) return i; return CardOrder.Length; }
         MetricVm Card(string key, string title, string icon, Rule rule, double fixedMax = 0)
         {
             var vm = new MetricVm(key, title, icon, rule, _app.Settings.Save, fixedMax);
+            vm.SetLive(_live);
             int r = Rank(key), pos = _cards.Count;
             for (int i = 0; i < _cards.Count; i++) if (Rank(_cards[i].Key) > r) { pos = i; break; }
             _cards.Insert(pos, vm); _byKey[key] = vm; Relayout(); return vm;
@@ -131,6 +216,13 @@ namespace PerfMonitorLive.UI
             if ((smp.gpuMHz.HasValue || hw.SawGpuClock) && !_byKey.ContainsKey("gpuMHz")) Card("gpuMHz", "Fréquence GPU", "⚡", null);
             if ((smp.cpuW.HasValue || hw.SawCpuPower) && !_byKey.ContainsKey("cpuW")) Card("cpuW", "Consommation CPU", "🔌", s.Get("cpuW"));
             if ((smp.gpuW.HasValue || hw.SawGpuPower) && !_byKey.ContainsKey("gpuW")) Card("gpuW", "Consommation GPU", "🔌", s.Get("gpuW"));
+            // FPS : la carte n'apparait qu'une fois un jeu mesure, et reste ensuite (l'historique garde son interet hors jeu)
+            if (smp.fps.HasValue && !_byKey.ContainsKey("fps")) Card("fps", "Images par seconde", "🎞️", null);
+            // Tensions : seuls les trois rails identifiés ont une carte. Les autres capteurs du Super I/O
+            // (Vcore, AVCC, 3VSB, VIN…) restent enregistrés dans l'historique, mais encombreraient le tableau de bord.
+            if (smp.v12.HasValue && !_byKey.ContainsKey("v12")) Card("v12", "Rail +12 V", "⚡", null);
+            if (smp.v5.HasValue && !_byKey.ContainsKey("v5")) Card("v5", "Rail +5 V", "⚡", null);
+            if (smp.v33.HasValue && !_byKey.ContainsKey("v33")) Card("v33", "Rail +3,3 V", "⚡", null);
             if (smp.bat.HasValue && !_byKey.ContainsKey("bat")) Card("bat", "Batterie", "🔋", null, 100);
             foreach (var d in smp.disks)
             {
@@ -201,6 +293,11 @@ namespace PerfMonitorLive.UI
             Upd("gpuMHz", smp.gpuMHz, smp.gpuMHz.HasValue ? smp.gpuMHz.Value.ToString("0") + " MHz" : "—", smp.gpuMHz.HasValue ? "cœur GPU" : gpuOff);
             Upd("cpuW", smp.cpuW, smp.cpuW.HasValue ? smp.cpuW.Value.ToString("0") + " W" : "—", smp.cpuW.HasValue ? "package" : noTemp);
             Upd("gpuW", smp.gpuW, smp.gpuW.HasValue ? smp.gpuW.Value.ToString("0") + " W" : "—", smp.gpuW.HasValue ? "carte" : gpuOff);
+            Upd("fps", smp.fps, smp.fps.HasValue ? smp.fps.Value.ToString("0") + " FPS" : "—", smp.fps.HasValue ? "jeu au premier plan" : "aucun jeu detecte");
+            // Tolérance ATX : ±5 % sur chaque rail. Sortir de la fourchette basse sous charge est le signe recherché.
+            Upd("v12", smp.v12, smp.v12.HasValue ? smp.v12.Value.ToString("0.00") + " V" : "—", smp.v12.HasValue ? "toléré 11,40 – 12,60 V" : noTemp);
+            Upd("v5", smp.v5, smp.v5.HasValue ? smp.v5.Value.ToString("0.00") + " V" : "—", smp.v5.HasValue ? "toléré 4,75 – 5,25 V" : noTemp);
+            Upd("v33", smp.v33, smp.v33.HasValue ? smp.v33.Value.ToString("0.00") + " V" : "—", smp.v33.HasValue ? "toléré 3,14 – 3,47 V" : noTemp);
             foreach (var f in smp.fans) Upd("fan:" + f.n, f.rpm, f.rpm + " tr/min", f.rpm == 0 ? "arrêté ou non lu" : "");
             foreach (var st in smp.stor)
             {
@@ -229,7 +326,13 @@ namespace PerfMonitorLive.UI
             }
             ExtrasOnSample(smp);
             MachineOnSample();
-            if (!IsVisible) return;
+            if (!WindowShown) return;   // cachée ou réduite : en-tête et processus rafraîchis au retour (RefreshShown)
+            if (ProcsTabShown) UpdateProcs(smp);
+            UpdateHeader(smp);
+        }
+
+        void UpdateProcs(Sample smp)
+        {
             for (int i = 0; i < smp.procs.Count; i++)
             {
                 if (_procs.Count <= i) _procs.Add(new ProcVm());
@@ -240,9 +343,16 @@ namespace PerfMonitorLive.UI
                 pv.DeltaBrush = leak != null && leak.MemDelta1hMB >= 400 ? Palette.B(Palette.Bad) : Palette.B(Palette.Muted);
             }
             while (_procs.Count > smp.procs.Count) _procs.RemoveAt(_procs.Count - 1);
-            LeaksText.Text = _app.Sampler.Leaks.Suspects().Any()
-                ? "Fuites probables : " + string.Join(" · ", _app.Sampler.Leaks.Suspects().Select(l => l.Name + " (+" + Math.Round(l.MemDelta1hMB) + " Mo/h)"))
+            var suspects = _app.Sampler.Leaks.Suspects().ToList();   // une seule énumération par mesure
+            LeaksText.Text = suspects.Count > 0
+                ? "Fuites probables : " + string.Join(" · ", suspects.Select(l => l.Name + " (+" + Math.Round(l.MemDelta1hMB) + " Mo/h)"))
                 : "Aucune fuite mémoire détectée sur les 3 dernières heures.";
+        }
+
+        /// <summary>Barre de titre : heure de mise à jour et pastille d'état (pinceaux partagés : pas de réaffectation inutile).</summary>
+        void UpdateHeader(Sample smp)
+        {
+            var active = _app.Alerts.ActiveRules;
             StatusText.Text = "Mis à jour à " + smp.Time.ToString("HH:mm:ss");
             if (active.Count > 0)
             {
@@ -280,6 +390,8 @@ namespace PerfMonitorLive.UI
             base.OnStateChanged(e);
             MaxBtn.Content = WindowState == WindowState.Maximized ? "\uE923" : "\uE922";
             BorderThickness = WindowState == WindowState.Maximized ? new Thickness(7) : new Thickness(0);
+            UpdateLiveState();   // reduite : cartes en sommeil, mascotte figee ; restauree : reprise
+            RefreshShown();
         }
         void Pause_Click(object s, RoutedEventArgs e) { _app.TogglePause(); UpdatePauseText(); }
         void Test_Click(object s, RoutedEventArgs e) => _app.TestToast();

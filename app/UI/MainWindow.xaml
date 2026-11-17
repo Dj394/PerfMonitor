@@ -152,7 +152,7 @@
                     <Button Style="{StaticResource CloseButton}" Content="&#xE8BB;" Click="Close_Click" ToolTip="Fermer (reste dans la zone de notification)"/>
                 </StackPanel>
                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                    <Border Width="34" Height="34" CornerRadius="9" Margin="0,0,12,0">
+                    <Border x:Name="HeaderIcon" Width="34" Height="34" CornerRadius="9" Margin="0,0,12,0">
                         <Border.Effect><DropShadowEffect BlurRadius="14" ShadowDepth="0" Color="#5A7CFF" Opacity="0.55"/></Border.Effect>
                         <Image Source="pack://application:,,,/app-icon.png" Stretch="Uniform"/>
                     </Border>
@@ -191,7 +191,7 @@
 
         <TabControl x:Name="Tabs" Background="Transparent" Foreground="{DynamicResource FgBrush}" BorderThickness="0" Margin="14,12,14,14" Padding="0,10,0,0">
             <!-- LIVE -->
-            <TabItem Header="⚡  Live">
+            <TabItem x:Name="LiveTab" Header="⚡  Live">
                 <Grid>
                     <ScrollViewer x:Name="LiveScroll" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" SizeChanged="LiveScroll_SizeChanged">
                         <ItemsControl x:Name="Cards" Height="{Binding GridHeight, RelativeSource={RelativeSource AncestorType=Window}}">
@@ -216,7 +216,8 @@
                                                 <TextBlock Text="{Binding ValueText}" FontSize="{Binding ValueFontSize, RelativeSource={RelativeSource AncestorType=Window}}" FontWeight="SemiBold" Foreground="{Binding LevelBrush}"/>
                                             </DockPanel>
                                             <Border Grid.Row="2" Height="6" CornerRadius="3" Background="{DynamicResource SparkBgBrush}" Margin="0,0,0,8" Visibility="{Binding GaugeVisible}">
-                                                <Border Width="{Binding GaugeWidth}" HorizontalAlignment="Left" CornerRadius="3" Background="{Binding LevelBrush}"/>
+                                                <!-- barre pleine largeur découpée (Clip arrondi) : la mise à jour ne touche que le rendu, pas le layout -->
+                                                <Border CornerRadius="3" Background="{Binding LevelBrush}" Clip="{Binding GaugeClip}"/>
                                             </Border>
                                             <Border Grid.Row="3" CornerRadius="8" Background="{DynamicResource SparkBgBrush}" ClipToBounds="True" MinHeight="58">
                                                 <Canvas ClipToBounds="True" SizeChanged="Spark_SizeChanged">
@@ -286,7 +287,7 @@
             </TabItem>
 
             <!-- PROCESSUS -->
-            <TabItem Header="🧩  Processus">
+            <TabItem x:Name="ProcsTab" Header="🧩  Processus">
                 <Border Style="{StaticResource Section}" VerticalAlignment="Top">
                     <StackPanel>
                         <TextBlock Text="Processus les plus gourmands" Style="{StaticResource SectionTitle}" Margin="0"/>

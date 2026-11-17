@@ -56,22 +56,27 @@ namespace PerfMonitorLive.UI
             _profAuto.Text = auto ? "Automatique — actuellement « " + active + " »" : "Automatique (jeu / nuit / travail)";
         }
 
+        // Polices et format en cache ; l'icône n'est redessinée que si le nombre affiché ou la couleur change.
+        readonly Font _font10 = new Font("Segoe UI", 10, FontStyle.Bold, GraphicsUnit.Pixel), _font12 = new Font("Segoe UI", 12, FontStyle.Bold, GraphicsUnit.Pixel);
+        readonly StringFormat _sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
+        string _lastText, _lastNum; int _lastBg;
+
         public void Update(double cpu, double mem, bool alert)
         {
             var text = "PerfMonitor Live\nCPU " + Math.Round(cpu) + " %  ·  RAM " + Math.Round(mem) + " %";
             if (text.Length > 63) text = text.Substring(0, 63);
-            _icon.Text = text;
+            if (text != _lastText) { _icon.Text = text; _lastText = text; }
             Color bg = alert ? Color.FromArgb(0xE5, 0x3E, 0x3E) : cpu >= 85 ? Color.FromArgb(0xE0, 0x7A, 0x1F) : cpu >= 60 ? Color.FromArgb(0xC9, 0xA2, 0x27) : Color.FromArgb(0x2E, 0x8B, 0x57);
+            var s = Math.Round(cpu).ToString();
+            if (_hIcon != IntPtr.Zero && s == _lastNum && bg.ToArgb() == _lastBg) return;
+            _lastNum = s; _lastBg = bg.ToArgb();
             using (var bmp = new Bitmap(32, 32))
             using (var g = Graphics.FromImage(bmp))
             {
                 g.SmoothingMode = SmoothingMode.AntiAlias; g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
                 g.Clear(Color.Transparent);
                 using (var b = new SolidBrush(bg)) g.FillEllipse(b, 1, 1, 30, 30);
-                var s = Math.Round(cpu).ToString();
-                using (var f = new Font("Segoe UI", s.Length > 2 ? 10 : 12, FontStyle.Bold, GraphicsUnit.Pixel))
-                using (var sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center })
-                    g.DrawString(s, f, Brushes.White, new RectangleF(0, 1, 32, 30), sf);
+                g.DrawString(s, s.Length > 2 ? _font10 : _font12, Brushes.White, new RectangleF(0, 1, 32, 30), _sf);
                 var h = bmp.GetHicon();
                 var old = _icon.Icon; var oldH = _hIcon;
                 _icon.Icon = Icon.FromHandle(h); _hIcon = h;
@@ -82,6 +87,10 @@ namespace PerfMonitorLive.UI
         public void Balloon(string title, string text) { try { _icon.ShowBalloonTip(3000, title, text, WF.ToolTipIcon.Info); } catch { } }
 
         [DllImport("user32.dll")] static extern bool DestroyIcon(IntPtr h);
-        public void Dispose() { _icon.Visible = false; _icon.Dispose(); if (_hIcon != IntPtr.Zero) DestroyIcon(_hIcon); }
+        public void Dispose()
+        {
+            _icon.Visible = false; _icon.Dispose(); if (_hIcon != IntPtr.Zero) DestroyIcon(_hIcon);
+            _font10.Dispose(); _font12.Dispose(); _sf.Dispose();
+        }
     }
 }

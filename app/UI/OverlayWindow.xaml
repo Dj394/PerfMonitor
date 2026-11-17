@@ -5,10 +5,17 @@
         WindowStyle="None" AllowsTransparency="True" Background="Transparent" ResizeMode="NoResize"
         ShowInTaskbar="False" ShowActivated="False" Topmost="True" Focusable="False" WindowStartupLocation="Manual"
         FontFamily="Segoe UI" FontSize="13">
-    <Border CornerRadius="0,0,14,14" Background="#E0141A22" BorderBrush="#334A5568" BorderThickness="1,0,1,1" Padding="16,8">
-        <Border.Effect><DropShadowEffect BlurRadius="14" ShadowDepth="0" Opacity="0.5"/></Border.Effect>
+    <Grid>
+        <!-- fond + ombre : calque fixe, mis en cache (bitmap) pour ne pas refaire l ombre a chaque mise a jour du texte -->
+        <Border x:Name="ShadowLayer" IsHitTestVisible="False">
+            <Border CornerRadius="0,0,14,14" Background="#E0141A22" BorderBrush="#334A5568" BorderThickness="1,0,1,1">
+                <Border.Effect><DropShadowEffect BlurRadius="14" ShadowDepth="0" Opacity="0.5"/></Border.Effect>
+            </Border>
+        </Border>
+        <Border BorderThickness="1,0,1,1" Padding="16,8">
         <StackPanel Orientation="Horizontal">
             <TextBlock x:Name="GameText" Text="🎮 Jeu" Foreground="#8C97A8" Margin="0,0,16,0" VerticalAlignment="Center" FontWeight="SemiBold"/>
+            <TextBlock x:Name="FpsText" Foreground="#E8ECF2" Margin="0,0,16,0" VerticalAlignment="Center" FontSize="16" FontWeight="Bold"/>
             <TextBlock x:Name="CpuText" Foreground="#E8ECF2" Margin="0,0,14,0" VerticalAlignment="Center"/>
             <TextBlock x:Name="TempText" Foreground="#E8ECF2" Margin="0,0,14,0" VerticalAlignment="Center"/>
             <TextBlock x:Name="GpuText" Foreground="#E8ECF2" Margin="0,0,14,0" VerticalAlignment="Center"/>
@@ -16,5 +23,6 @@
             <TextBlock x:Name="DiskText" Foreground="#E8ECF2" Margin="0,0,14,0" VerticalAlignment="Center"/>
             <TextBlock x:Name="ClockText" Foreground="#8C97A8" VerticalAlignment="Center"/>
         </StackPanel>
-    </Border>
+        </Border>
+    </Grid>
 </Window>

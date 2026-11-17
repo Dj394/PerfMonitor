@@ -19,8 +19,15 @@
             </Setter>
         </Style>
     </Window.Resources>
-    <Border x:Name="Card" CornerRadius="14" Background="{DynamicResource ToastBgBrush}" BorderBrush="{DynamicResource ToastBorderBrush}" BorderThickness="1" Margin="4" Cursor="Hand">
-        <Border.Effect><DropShadowEffect BlurRadius="14" ShadowDepth="0" Opacity="0.55"/></Border.Effect>
+    <Grid>
+    <!-- fond + ombre : calque fixe, mis en cache (bitmap) ; le fondu de la fenetre ne refait plus l'ombre a chaque image -->
+    <Border x:Name="ShadowLayer" IsHitTestVisible="False">
+        <Border CornerRadius="14" Background="{DynamicResource ToastBgBrush}" Margin="4">
+            <Border.Effect><DropShadowEffect BlurRadius="14" ShadowDepth="0" Opacity="0.55"/></Border.Effect>
+        </Border>
+    </Border>
+    <!-- la carte (bordure coloree par gravite posee en code, contenu) : Transparent = cliquable comme avant -->
+    <Border x:Name="Card" CornerRadius="14" Background="Transparent" BorderBrush="{DynamicResource ToastBorderBrush}" BorderThickness="1" Margin="4" Cursor="Hand">
         <Grid Margin="12,10,10,10">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/>
@@ -35,4 +42,5 @@
                     VerticalAlignment="Top" Padding="6,0" Cursor="Hand" Focusable="False"/>
         </Grid>
     </Border>
+    </Grid>
 </Window>

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Diagnostics;
 using System.Linq;
 using System.Runtime.InteropServices;
@@ -19,7 +19,7 @@ namespace PerfMonitorLive
         public ToastManager Toasts { get; private set; }
         public Sampler Sampler => _sampler;
         public GameDetector Games { get; private set; }
-        Sampler _sampler; HistoryWriter _history; TrayIcon _tray; MainWindow _main; Mutex _mutex;
+        Sampler _sampler; HistoryWriter _history; PowerLog _power; TrayIcon _tray; MainWindow _main; Mutex _mutex;
         OverlayWindow _overlay; WidgetWindow _widget;
         readonly DispatcherTimer _slow = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
         DateTime _lastHourly = DateTime.MinValue;
@@ -29,17 +29,21 @@ namespace PerfMonitorLive
         protected override void OnStartup(StartupEventArgs e)
         {
             base.OnStartup(e);
-            _mutex = new Mutex(true, "PerfMonitorLive-SingleInstance", out bool first);
-            var wake = new EventWaitHandle(false, EventResetMode.AutoReset, "PerfMonitorLive-Show");
+            _mutex = new Mutex(true, "PerfMonitorLive-SingleInstance" + Paths.InstanceSuffix, out bool first);
+            var wake = new EventWaitHandle(false, EventResetMode.AutoReset, "PerfMonitorLive-Show" + Paths.InstanceSuffix);
             if (!first) { wake.Set(); Shutdown(); return; }
             bool trayOnly = e.Args.Any(a => a.Equals("--tray", StringComparison.OrdinalIgnoreCase));
             bool here = e.Args.Any(a => a.Equals("--here", StringComparison.OrdinalIgnoreCase));
-            if (!trayOnly && !here && !Hardware.IsElevated && TaskExists())
+            if (!trayOnly && !here && !Paths.Bench && !Hardware.IsElevated)
             {
-                _mutex.ReleaseMutex(); _mutex.Dispose(); _mutex = null;
-                RunTask();
-                for (int i = 0; i < 40; i++) { Thread.Sleep(250); if (Mutex.TryOpenExisting("PerfMonitorLive-SingleInstance", out var m)) { m.Dispose(); break; } }
-                Thread.Sleep(300); wake.Set(); Shutdown(); return;
+                bool task = TaskExists(); _taskExists = task ? 1 : 0;   // résultat gardé : ApplyStartup ne relancera pas schtasks
+                if (task)
+                {
+                    _mutex.ReleaseMutex(); _mutex.Dispose(); _mutex = null;
+                    RunTask();
+                    for (int i = 0; i < 40; i++) { Thread.Sleep(250); if (Mutex.TryOpenExisting("PerfMonitorLive-SingleInstance" + Paths.InstanceSuffix, out var m)) { m.Dispose(); break; } }
+                    Thread.Sleep(300); wake.Set(); Shutdown(); return;
+                }
             }
             new Thread(() => { while (true) { wake.WaitOne(); Dispatcher.BeginInvoke(new Action(ShowMain)); } }) { IsBackground = true, Name = "WakeListener" }.Start();
             AppDomain.CurrentDomain.UnhandledException += (s, a) => Paths.Log("Unhandled: " + a.ExceptionObject);
@@ -47,14 +51,18 @@ namespace PerfMonitorLive
 
             Settings = Settings.Load();
             ApplyTheme();
-            SystemEvents.UserPreferenceChanged += (s, a) => { if (a.Category == UserPreferenceCategory.General) Dispatcher.BeginInvoke(new Action(ApplyTheme)); };
+            SystemEvents.UserPreferenceChanged += (s, a) => { if (a.Category == UserPreferenceCategory.General) Dispatcher.BeginInvoke(new Action(() => { if (ApplyTheme()) _main?.SettingsChangedHook(); })); };   // thème « Auto » suivant Windows : cartes et historique redessinés
             Alerts = new AlertEngine(Settings);
             Toasts = new ToastManager(Settings);
             Games = new GameDetector(Settings);
             Toasts.GameActive = () => Games.Active;
             _history = new HistoryWriter();
+            _power = new PowerLog { GameActive = () => Games.Active };
             _tray = new TrayIcon();
-            _main = new MainWindow(this);
+            // La fenêtre principale n'est plus construite ici : elle l'est au premier affichage (voir EnsureMain).
+            // L'adaptation des seuils au matériel était déclenchée par la fenêtre (Inventory.Scanned dans MainWindow.Machine) :
+            // tant qu'elle n'existe pas, c'est App qui s'en charge. Settings.ApplyMachine n'agit qu'une fois, un double appel est sans effet.
+            Inventory.Scanned += m => { bool viaMain = _main != null; Dispatcher.BeginInvoke(new Action(() => { if (!viaMain) OnInventory(m); })); };
 
             Alerts.Alert += a => Dispatcher.BeginInvoke(new Action(() => OnAlert(a)));
             Toasts.ToastClicked += ShowMain;
@@ -66,15 +74,22 @@ namespace PerfMonitorLive
             _tray.TestClicked += TestToast;
             _tray.WidgetToggled += () => { Settings.WidgetEnabled = !Settings.WidgetEnabled; Settings.Save(); OnSettingsChanged(); };
             _tray.ProfileSelected += name => { if (name == "Auto") { Settings.ProfileAuto = true; Settings.Save(); ApplyAutoProfile(); } else { Settings.ProfileAuto = false; SwitchProfile(name); } };
-            _tray.PauseToggled += () => { TogglePause(); _main.UpdatePauseText(); };
+            _tray.PauseToggled += () => { TogglePause(); _main?.UpdatePauseText(); };
             _tray.StartupToggled += () => { Settings.StartWithWindows = !Settings.StartWithWindows; Settings.Save(); OnSettingsChanged(); };
             _tray.QuitClicked += Quit;
             Games.Started += g => Dispatcher.BeginInvoke(new Action(() => OnGameStarted(g)));
             Games.Ended += sess => Dispatcher.BeginInvoke(new Action(() => OnGameEnded(sess)));
-            ApplyStartup();
+            // ApplyStartup (schtasks) n'est plus appelé ici : OnSettingsChanged, plus bas, s'en charge — une seule fois, hors thread UI.
 
             _sampler = new Sampler();
-            _sampler.SampleReady += s => Dispatcher.BeginInvoke(new Action(() => OnSample(s)));
+            _sampler.Fps.TargetPid = () => Games.Active ? Games.Pid : 0;
+            // Journal alimentation branché sur le thread de mesure, pas sur l'interface : quand la machine est
+            // saturée, le Dispatcher prend du retard — or c'est exactement là qu'on veut la trace des dernières secondes.
+            _sampler.SampleReady += s => _power.OnSample(s);
+            // Priorité Background : la mesure passe après la saisie et le rendu. Toutes les mesures partagent la même
+            // priorité, donc le Dispatcher (FIFO par priorité) les traite dans l'ordre d'arrivée. Délégué en cache : pas de fermeture par tick.
+            Action<Sample> onSample = OnSample;
+            _sampler.SampleReady += s => Dispatcher.BeginInvoke(DispatcherPriority.Background, onSample, s);
             _sampler.Start();
             _slow.Tick += (s, a) => SlowTick();
             _slow.Start();
@@ -83,47 +98,98 @@ namespace PerfMonitorLive
             ThreadPool.QueueUserWorkItem(_ =>
             {
                 try { Inventory.Scan(); } catch (Exception ex) { Paths.Log("inventaire: " + ex.Message); }
-                try { BootReport.Refresh(); var boots = BootReport.Load(); var last = boots.LastOrDefault(); Dispatcher.BeginInvoke(new Action(() => _main.SetLastBoot(last))); }
+                try { BootReport.Refresh(); var boots = BootReport.Load(); var last = boots.LastOrDefault(); Dispatcher.BeginInvoke(new Action(() => { _lastBoot = last; _hasBoot = true; _main?.SetLastBoot(last); })); }
                 catch (Exception ex) { Paths.Log("boot: " + ex.Message); }
             });
 
             if (!trayOnly) ShowMain();
             OnSettingsChanged();
             if (e.Args.Any(a => a.Equals("--digest", StringComparison.OrdinalIgnoreCase))) ShowDigest(DateTime.Today.AddDays(-1), true);
-            Paths.Log("Démarrage (" + (trayOnly ? "tray" : "fenêtre") + ")" + (Hardware.IsElevated ? " admin" : ""));
+            Paths.Log("Démarrage (" + (trayOnly ? "tray" : "fenêtre") + ")" + (Hardware.IsElevated ? " admin" : "") + (Paths.Bench ? " banc" : "") + " en " + StartupMs() + " ms");
         }
 
         // ---------------------------------------------------------------- boucle
         int _tick;
+        static long StartupMs() { try { return (long)(DateTime.Now - Process.GetCurrentProcess().StartTime).TotalMilliseconds; } catch { return -1; } }
         void OnSample(Sample s)
         {
+            if (_tick == 0) Paths.Log("Première mesure affichée à " + StartupMs() + " ms");
             _last = s;
             s.GameActive = Games.Active;
             EnsureDynamicRules(s);
             Alerts.OnSample(s);
             _history.OnSample(s);
-            _main.OnSample(s);
-            if (_tick < 600 && Inventory.UpdateCapabilities(s, Hardware.IsElevated, _sampler.Hw)) _main.RefreshMachine();
+            if (_main != null) _main.OnSample(s);
+            else { _pending.Enqueue(s); if (_pending.Count > PendingMax) _pending.Dequeue(); }
+            if (_tick < 600 && Inventory.UpdateCapabilities(s, Hardware.IsElevated, _sampler.Hw)) _main?.RefreshMachine();
             _overlay?.Update(s);
             if (_widget != null && _widget.IsVisible) _widget.Update(s);
             if (++_tick % 2 == 0) _tray.Update(s.cpu, s.memPct, Alerts.ActiveRules.Count > 0);
         }
         /// <summary>Règles d'alerte des disques, de la santé SMART et des ventilateurs : créées dès la première mesure.
-        /// Sans ça, une session démarrée réduite dans la zone de notification n'arme aucune alerte disque tant que la fenêtre n'a pas été ouverte.</summary>
+        /// Sans ça, une session démarrée réduite dans la zone de notification n'arme aucune alerte disque tant que la fenêtre n'a pas été ouverte.
+        /// Les noms déjà assurés sont mémorisés : à chaque tick on ne fait plus que des recherches dans des HashSet (aucune
+        /// allocation, aucun parcours des règles). La mémoire est vidée dès que la liste de règles change (profil, réglages).</summary>
         void EnsureDynamicRules(Sample s)
         {
-            var m = Inventory.Current; bool ch = false;
-            foreach (var d in s.disks) ch |= Settings.EnsureDisk(d.n, m.DiskByPerfName(d.n)?.Kind ?? Metrics.DiskKind.Unknown);
-            foreach (var st in s.stor) ch |= Settings.EnsureStorage(st.n, m.DiskByStorName(st.n)?.Kind ?? Metrics.DiskKind.Unknown);
-            foreach (var f in s.fans) if (f.rpm > 0) ch |= Settings.EnsureFan(f.n);
+            var rules = Settings.Rules;
+            if (!ReferenceEquals(rules, _ensuredRules) || rules.Count != _ensuredCount) ResetEnsuredRules();
+            MachineInfo m = null; bool ch = false;
+            foreach (var d in s.disks)
+                if (!_ensuredDisks.Contains(d.n)) { m ??= Inventory.Current; ch |= Settings.EnsureDisk(d.n, m.DiskByPerfName(d.n)?.Kind ?? Metrics.DiskKind.Unknown); _ensuredDisks.Add(d.n); }
+            foreach (var st in s.stor)
+                if (!_ensuredStor.Contains(st.n)) { m ??= Inventory.Current; ch |= Settings.EnsureStorage(st.n, m.DiskByStorName(st.n)?.Kind ?? Metrics.DiskKind.Unknown); _ensuredStor.Add(st.n); }
+            foreach (var f in s.fans)
+                if (f.rpm > 0 && !_ensuredFans.Contains(f.n)) { ch |= Settings.EnsureFan(f.n); _ensuredFans.Add(f.n); }
             if (ch) Settings.Save();
+            _ensuredRules = Settings.Rules; _ensuredCount = _ensuredRules.Count;
         }
+        readonly System.Collections.Generic.HashSet<string> _ensuredDisks = new System.Collections.Generic.HashSet<string>(), _ensuredStor = new System.Collections.Generic.HashSet<string>(), _ensuredFans = new System.Collections.Generic.HashSet<string>();
+        System.Collections.Generic.List<Rule> _ensuredRules; int _ensuredCount;
+        void ResetEnsuredRules() { _ensuredDisks.Clear(); _ensuredStor.Clear(); _ensuredFans.Clear(); _ensuredRules = null; }
 
         /// <summary>Après un scan matériel : seuils par défaut adaptés (première installation) et cartes reconstruites.</summary>
         public void OnInventory(MachineInfo m)
         {
-            if (Settings.ApplyMachine(m)) { Paths.Log("Seuils par défaut adaptés au matériel (" + m.KindText + ", CPU " + m.Cpu.Vendor + ", GPU " + m.GpuVendor + ")"); _main.RebuildCards(); OnSettingsChanged(); }
+            if (Settings.ApplyMachine(m)) { Paths.Log("Seuils par défaut adaptés au matériel (" + m.KindText + ", CPU " + m.Cpu.Vendor + ", GPU " + m.GpuVendor + ")"); _main?.RebuildCards(); OnSettingsChanged(); }
         }
+
+        // ---------------------------------------------------------------- fenêtre principale paresseuse
+        // En --tray, la fenêtre (arbre visuel, cartes, historique, conseiller…) n'est construite qu'au premier affichage.
+        // Jusque-là App garde ce qu'il faut pour la lui rejouer : les dernières mesures (≤ 300, soit 5 min — 10 en mode
+        // économie — la profondeur des courbes des cartes, et de quoi remplir les moyennes glissantes du conseiller),
+        // le dernier démarrage et l'état des mises à jour. Le tampon est vidé à la création.
+        const int PendingMax = 300;
+        readonly System.Collections.Generic.Queue<Sample> _pending = new System.Collections.Generic.Queue<Sample>();
+        BootEntry _lastBoot; bool _hasBoot;
+        string _updText, _updUrl; bool _hasUpdText, _updInstallable;
+
+        MainWindow EnsureMain()
+        {
+            if (_main != null) return _main;
+            var sw = Stopwatch.StartNew();
+            int replayed = _pending.Count;
+            var w = new MainWindow(this);
+            _main = w;
+            this.MainWindow = w;   // sinon WPF retient la première fenêtre créée (une notification, l'overlay…)
+            if (_hasBoot) w.SetLastBoot(_lastBoot);
+            while (_pending.Count > 0)
+            {
+                var s = _pending.Dequeue();
+                try { w.OnSample(s); } catch (Exception ex) { Paths.Log("rejeu mesure: " + ex.Message); }
+            }
+            _pending.TrimExcess();
+            if (_hasUpdText) w.SetUpdateStatus(_updText, _updUrl);
+            w.SetUpdateInstallable(_updInstallable);
+            Paths.Log("Fenêtre principale créée en " + sw.ElapsedMilliseconds + " ms (" + replayed + " mesures rejouées)");
+            return w;
+        }
+        void SetUpdateStatus(string text, string url)
+        {
+            _updText = text; _updUrl = url; _hasUpdText = true;
+            _main?.SetUpdateStatus(text, url);
+        }
+        void SetUpdateInstallable(bool on) { _updInstallable = on; _main?.SetUpdateInstallable(on); }
         DateTime? _mainHiddenSince; bool _eco;
         /// <summary>Mode économie : 2 s entre deux mesures si l'option est active et (sur batterie, ou rien de visible depuis > 5 min).</summary>
         void UpdateEco()
@@ -153,28 +219,28 @@ namespace PerfMonitorLive
             {
                 if (_downloadedExe == null || !System.IO.File.Exists(_downloadedExe))
                 {
-                    _main.SetUpdateStatus("Téléchargement de la " + info.Version + "…", null);
-                    var prog = new Progress<double>(p => _main.SetUpdateStatus("Téléchargement de la " + info.Version + "… " + p.ToString("0") + " %", null));
+                    SetUpdateStatus("Téléchargement de la " + info.Version + "…", null);
+                    var prog = new Progress<double>(p => SetUpdateStatus("Téléchargement de la " + info.Version + "… " + p.ToString("0") + " %", null));
                     _downloadedExe = await Updater.DownloadAsync(info, prog);
                     Paths.Log("MAJ " + info.Version + " téléchargée : " + _downloadedExe);
                 }
-                if (Games.Active) { _main.SetUpdateStatus("Mise à jour " + info.Version + " téléchargée : installation à la fin du jeu.", null); _installing = false; ScheduleInstallRetry(); return; }
+                if (Games.Active) { SetUpdateStatus("Mise à jour " + info.Version + " téléchargée : installation à la fin du jeu.", null); _installing = false; ScheduleInstallRetry(); return; }
                 int left = 20;
                 var a = new AlertInfo { RuleId = "update", Time = DateTime.Now, Severity = Severity.Info, Title = "Mise à jour " + info.Version + " prête", Detail = "PerfMonitor va se relancer dans 20 s pour installer la nouvelle version (réglages et historique conservés)." };
                 bool later = false;
                 a.Actions.Add(new ToastAction { Label = "Maintenant", Primary = true, Run = () => { _installTimer?.Stop(); ApplyUpdate(); } });
-                a.Actions.Add(new ToastAction { Label = "Plus tard", Run = () => { later = true; _installTimer?.Stop(); _installing = false; _main.SetUpdateStatus("Mise à jour " + info.Version + " téléchargée : elle s'installera à la prochaine vérification (ou bouton « Installer maintenant »).", null); ScheduleInstallRetry(); } });
+                a.Actions.Add(new ToastAction { Label = "Plus tard", Run = () => { later = true; _installTimer?.Stop(); _installing = false; SetUpdateStatus("Mise à jour " + info.Version + " téléchargée : elle s'installera à la prochaine vérification (ou bouton « Installer maintenant »).", null); ScheduleInstallRetry(); } });
                 Toasts.Show(a, true);
-                _main.SetUpdateStatus("Mise à jour " + info.Version + " téléchargée : relance dans 20 s…", null);
+                SetUpdateStatus("Mise à jour " + info.Version + " téléchargée : relance dans 20 s…", null);
                 _installTimer?.Stop();
                 _installTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
-                _installTimer.Tick += (s, e) => { if (later) { _installTimer.Stop(); return; } if (--left <= 0) { _installTimer.Stop(); ApplyUpdate(); } else _main.SetUpdateStatus("Mise à jour " + info.Version + " téléchargée : relance dans " + left + " s…", null); };
+                _installTimer.Tick += (s, e) => { if (later) { _installTimer.Stop(); return; } if (--left <= 0) { _installTimer.Stop(); ApplyUpdate(); } else SetUpdateStatus("Mise à jour " + info.Version + " téléchargée : relance dans " + left + " s…", null); };
                 _installTimer.Start();
             }
             catch (Exception ex)
             {
                 Paths.Log("MAJ install: " + ex.Message);
-                _main.SetUpdateStatus("Installation impossible : " + ex.Message + " — tu peux télécharger à la main.", info.Url);
+                SetUpdateStatus("Installation impossible : " + ex.Message + " — tu peux télécharger à la main.", info.Url);
                 _installing = false;
             }
         }
@@ -195,13 +261,14 @@ namespace PerfMonitorLive
                 Updater.LaunchReplace(_downloadedExe, TaskExists());
                 Quit();
             }
-            catch (Exception ex) { Paths.Log("MAJ apply: " + ex.Message); _main.SetUpdateStatus("Relance impossible : " + ex.Message, _pendingUpdate?.Url); _installing = false; }
+            catch (Exception ex) { Paths.Log("MAJ apply: " + ex.Message); SetUpdateStatus("Relance impossible : " + ex.Message, _pendingUpdate?.Url); _installing = false; }
         }
 
         // ---------------------------------------------------------------- mises à jour
         bool _updateChecking;
         void MaybeCheckUpdate()
         {
+            if (Paths.Bench) return;
             if (!Settings.UpdateAuto || _updateChecking) return;
             if (Settings.LastUpdateCheck.HasValue && (DateTime.Now - Settings.LastUpdateCheck.Value).TotalHours < 24) return;
             CheckUpdate(false);
@@ -210,7 +277,7 @@ namespace PerfMonitorLive
         public async void CheckUpdate(bool manual)
         {
             if (_updateChecking) return; _updateChecking = true;
-            _main.SetUpdateStatus("Vérification…", null);
+            SetUpdateStatus("Vérification…", null);
             try
             {
                 var info = await Updater.CheckAsync();
@@ -218,8 +285,8 @@ namespace PerfMonitorLive
                 if (info.IsNewer)
                 {
                     _pendingUpdate = info;
-                    _main.SetUpdateStatus("Nouvelle version disponible : " + info.Version + " (installée : " + Updater.CurrentVersion + ").", info.Url);
-                    _main.SetUpdateInstallable(true);
+                    SetUpdateStatus("Nouvelle version disponible : " + info.Version + " (installée : " + Updater.CurrentVersion + ").", info.Url);
+                    SetUpdateInstallable(true);
                     if (Settings.UpdateAutoInstall) InstallUpdate();
                     else
                     {
@@ -228,12 +295,12 @@ namespace PerfMonitorLive
                         Toasts.Show(a, true);
                     }
                 }
-                else { _pendingUpdate = null; _main.SetUpdateInstallable(false); _main.SetUpdateStatus("À jour (" + Updater.CurrentVersion + "). Vérifié le " + DateTime.Now.ToString("dd/MM à HH:mm") + ".", null); }
+                else { _pendingUpdate = null; SetUpdateInstallable(false); SetUpdateStatus("À jour (" + Updater.CurrentVersion + "). Vérifié le " + DateTime.Now.ToString("dd/MM à HH:mm") + ".", null); }
             }
             catch (Exception ex)
             {
                 Paths.Log("MAJ: " + ex.Message);
-                _main.SetUpdateStatus(manual ? "Vérification impossible (" + (ex.Message.Length > 80 ? ex.Message.Substring(0, 80) : ex.Message) + "). Le dépôt existe-t-il déjà et as-tu accès à Internet ?" : "", manual ? Updater.ReleasesUrl : null);
+                SetUpdateStatus(manual ? "Vérification impossible (" + (ex.Message.Length > 80 ? ex.Message.Substring(0, 80) : ex.Message) + "). Le dépôt existe-t-il déjà et as-tu accès à Internet ?" : "", manual ? Updater.ReleasesUrl : null);
                 if (!manual) { Settings.LastUpdateCheck = DateTime.Now; Settings.Save(); }   // pas de retentative en boucle
             }
             finally { _updateChecking = false; }
@@ -258,7 +325,9 @@ namespace PerfMonitorLive
             if (a.Severity == Severity.Critical && Settings.TelegramCritical && TelegramSender.Configured(Settings))
                 TelegramSender.Fire(Settings, "🚨 " + a.Title + "\n" + a.Detail);
         }
-        static readonly string[] Protected = { "System", "Registry", "csrss", "wininit", "winlogon", "services", "lsass", "svchost", "dwm", "explorer", "smss", "fontdrvhost", "PerfMonitorLive", "MsMpEng", "audiodg" };
+        static readonly string[] Protected = { "System", "Registry", "csrss", "wininit", "winlogon", "services", "lsass", "svchost", "dwm", "explorer", "smss", "fontdrvhost", "PerfMonitorLive", "MsMpEng", "audiodg",
+            // processus noyau / pseudo-processus dont le CPU est lu via NtQuerySystemInformation : ne jamais proposer de les terminer
+            "Memory Compression", "MemCompression", "Secure System", "vmmem", "vmmemWSL", "Idle", "System Idle Process", "LsaIso" };
         void AddActions(AlertInfo a)
         {
             var m = a.RuleId.Split(':')[0];
@@ -329,16 +398,29 @@ namespace PerfMonitorLive
             if (_widget == null)
             {
                 _widget = new WidgetWindow(Settings, () => Toasts.TargetScreen(), ShowMain);
-                _widget.HiddenByUser += () => { _tray.SetWidget(false); _main.SettingsVm.RaiseAll(); };
+                _widget.HiddenByUser += () => { _tray.SetWidget(false); _main?.SettingsVm.RaiseAll(); };
             }
             _widget.ApplyOpacity();
             if (!_widget.IsVisible) _widget.Show();
             if (_last != null) _widget.Update(_last);
         }
+        /// <summary>Nom du processus au premier plan. Le nom est gardé tant que le PID au premier plan ne change pas :
+        /// plus d'objet Process (ni de handle) ouvert à chaque appel. Un échec n'est pas mémorisé.</summary>
         public static string ForegroundProcessName()
         {
-            try { var h = GetForegroundWindow(); GetWindowThreadProcessId(h, out uint pid); using (var p = Process.GetProcessById((int)pid)) return p.ProcessName; } catch { return null; }
+            try
+            {
+                var h = GetForegroundWindow(); GetWindowThreadProcessId(h, out uint pid);
+                var c = _fg;
+                if (c != null && c.Pid == pid) return c.Name;
+                string name; using (var p = Process.GetProcessById((int)pid)) name = p.ProcessName;
+                _fg = new FgEntry(pid, name);
+                return name;
+            }
+            catch { return null; }
         }
+        sealed class FgEntry { public readonly uint Pid; public readonly string Name; public FgEntry(uint pid, string name) { Pid = pid; Name = name; } }
+        static volatile FgEntry _fg;
         [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
         [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
 
@@ -347,14 +429,15 @@ namespace PerfMonitorLive
         {
             if (name == Settings.ActiveProfile) { _tray.SetProfile(name, Settings.ProfileAuto); return; }
             Settings.SwitchProfile(name);
-            _main.RebuildCards(); _main.UpdateProfilePill();
+            ResetEnsuredRules();
+            _main?.RebuildCards(); _main?.UpdateProfilePill();
             _tray.SetProfile(name, Settings.ProfileAuto);
         }
         public void ApplyAutoProfile()
         {
             var want = Settings.AutoProfile(Games.Active, DateTime.Now);
             if (want != Settings.ActiveProfile) SwitchProfile(want); else _tray.SetProfile(want, Settings.ProfileAuto);
-            _main.UpdateProfilePill();
+            _main?.UpdateProfilePill();
         }
 
         // ---------------------------------------------------------------- bilan quotidien
@@ -383,13 +466,22 @@ namespace PerfMonitorLive
         }
 
         // ---------------------------------------------------------------- thème
-        public void ApplyTheme()
+        /// <summary>Thème effectivement chargé. App.xaml fusionne déjà Dark.xaml (et Palette.Light vaut false par défaut) :
+        /// au démarrage en thème sombre, rien n'est rechargé.</summary>
+        bool _themeLight = false;
+        /// <returns>true si le thème a réellement changé (dictionnaire rechargé).</returns>
+        public bool ApplyTheme()
         {
             bool light = Settings.Theme == "Light" || (Settings.Theme == "Auto" && WindowsUsesLightTheme());
+            // UserPreferenceChanged(General) et chaque modification de réglage arrivent ici : on ne recharge le dictionnaire
+            // (analyse XAML + réévaluation de toutes les ressources dynamiques) que si le thème change vraiment.
+            if (light == _themeLight && Resources.MergedDictionaries.Count > 0) return false;
+            _themeLight = light;
             var uri = new Uri(light ? "UI/Themes/Light.xaml" : "UI/Themes/Dark.xaml", UriKind.Relative);
             var dict = new ResourceDictionary { Source = uri };
             Resources.MergedDictionaries.Clear(); Resources.MergedDictionaries.Add(dict);
             Palette.Light = light;
+            return true;
         }
         static bool WindowsUsesLightTheme()
         {
@@ -399,6 +491,7 @@ namespace PerfMonitorLive
         // ---------------------------------------------------------------- réglages / démarrage
         public void OnSettingsChanged()
         {
+            ResetEnsuredRules();   // réglages importés/réinitialisés, profil… : les règles dynamiques seront ré-assurées au prochain tick
             ApplyStartup(); _tray.SetPaused(Settings.IsPaused); _tray.SetWidget(Settings.WidgetEnabled); _tray.SetProfile(Settings.ActiveProfile, Settings.ProfileAuto);
             ApplyTheme(); EnsureWidget();
             _main?.SettingsChangedHook();
@@ -416,30 +509,50 @@ namespace PerfMonitorLive
             catch (Exception ex) { Paths.Log("schtasks: " + ex.Message); return -1; }
         }
         static void RunTask() => Schtasks("/run /tn " + TaskName);
+        // Démarrage avec Windows : schtasks.exe (100-500 ms par appel) ne tourne plus sur le thread UI, et seulement quand
+        // l'option a changé depuis la dernière application (avant : 2 fois au démarrage, puis à chaque modification de réglage).
+        int _taskExists = -1;        // cache de TaskExists : -1 inconnu, 0 non, 1 oui
+        int _startupApplied = -1;    // valeur de StartWithWindows réellement appliquée : -1 jamais, 0 non, 1 oui
+        readonly object _startupLock = new object();
         void ApplyStartup()
         {
-            try
+            _tray.SetStartup(Settings.StartWithWindows);   // l'état affiché ne dépend que du réglage : immédiat, sur le thread UI
+            if (Paths.Bench) return;   // le banc ne touche ni à la tâche planifiée ni à la clé Run de l'instance installée
+            if (Volatile.Read(ref _startupApplied) == (Settings.StartWithWindows ? 1 : 0)) return;
+            ThreadPool.QueueUserWorkItem(_ => ApplyStartupCore());
+        }
+        void ApplyStartupCore()
+        {
+            lock (_startupLock)
             {
-                if (Hardware.IsElevated)
+                // valeur lue ici et non capturée : deux bascules rapides peuvent s'exécuter dans le désordre, la dernière exécutée applique l'état courant
+                bool want = Settings.StartWithWindows;
+                if (_startupApplied == (want ? 1 : 0)) return;
+                bool ok = true;   // _startupApplied n'est positionné qu'en cas de succès : un échec sera retenté au prochain appel
+                try
                 {
-                    // La tâche planifiée est créée par install-live.ps1. L'application ne la (re)crée que si l'option est active ET qu'elle manque
-                    // (jamais systématiquement au démarrage : un exe qui enregistre une tâche « highest » à chaque lancement est vu comme un logiciel de persistance par Defender).
-                    bool exists = TaskExists();
-                    if (Settings.StartWithWindows && !exists) Schtasks("/create /f /tn " + TaskName + " /sc onlogon /rl highest /it /tr \"\\\"" + Environment.ProcessPath + "\\\" --tray\"");
-                    else if (!Settings.StartWithWindows && exists) Schtasks("/delete /f /tn " + TaskName);
-                    using (var k = Registry.CurrentUser.OpenSubKey(RunKey, true)) if (k != null && k.GetValue(RunName) != null) k.DeleteValue(RunName);
-                }
-                else if (!TaskExists())
-                {
-                    using (var k = Registry.CurrentUser.OpenSubKey(RunKey, true))
+                    if (_taskExists < 0) _taskExists = TaskExists() ? 1 : 0;
+                    bool exists = _taskExists == 1;
+                    if (Hardware.IsElevated)
                     {
-                        if (Settings.StartWithWindows) k.SetValue(RunName, "\"" + Environment.ProcessPath + "\" --tray");
-                        else if (k.GetValue(RunName) != null) k.DeleteValue(RunName);
+                        // La tâche planifiée est créée par install-live.ps1. L'application ne la (re)crée que si l'option est active ET qu'elle manque
+                        // (jamais systématiquement au démarrage : un exe qui enregistre une tâche « highest » à chaque lancement est vu comme un logiciel de persistance par Defender).
+                        if (want && !exists) { if (Schtasks("/create /f /tn " + TaskName + " /sc onlogon /rl highest /it /tr \"\\\"" + Environment.ProcessPath + "\\\" --tray\"") == 0) _taskExists = 1; else ok = false; }
+                        else if (!want && exists) { if (Schtasks("/delete /f /tn " + TaskName) == 0) _taskExists = 0; else ok = false; }
+                        using (var k = Registry.CurrentUser.OpenSubKey(RunKey, true)) if (k != null && k.GetValue(RunName) != null) k.DeleteValue(RunName);
+                    }
+                    else if (!exists)
+                    {
+                        using (var k = Registry.CurrentUser.OpenSubKey(RunKey, true))
+                        {
+                            if (want) k.SetValue(RunName, "\"" + Environment.ProcessPath + "\" --tray");
+                            else if (k.GetValue(RunName) != null) k.DeleteValue(RunName);
+                        }
                     }
                 }
+                catch (Exception ex) { ok = false; Paths.Log("Startup: " + ex.Message); }
+                if (ok) Volatile.Write(ref _startupApplied, want ? 1 : 0);
             }
-            catch (Exception ex) { Paths.Log("Startup: " + ex.Message); }
-            _tray.SetStartup(Settings.StartWithWindows);
         }
 
         public void TogglePause()
@@ -469,11 +582,12 @@ namespace PerfMonitorLive
         void ShowMain()
         {
             if (_eco) { _eco = false; _sampler.IntervalMs = 1000; }
+            EnsureMain();
             ShowMainCore();
             if (!Settings.WelcomeShown) Dispatcher.BeginInvoke(new Action(() => _main.ShowWelcome()), DispatcherPriority.ApplicationIdle);
         }
         void ShowMainCore() { _main.Show(); if (_main.WindowState == WindowState.Minimized) _main.WindowState = WindowState.Normal; _main.Activate(); }
-        void ToggleMain() { if (_main.IsVisible && _main.WindowState != WindowState.Minimized) _main.Hide(); else ShowMain(); }
+        void ToggleMain() { if (_main != null && _main.IsVisible && _main.WindowState != WindowState.Minimized) _main.Hide(); else ShowMain(); }
         void Quit()
         {
             Games.ForceEnd();

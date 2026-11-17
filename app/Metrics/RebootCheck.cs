@@ -1,6 +1,6 @@
 using System;
 using System.Collections.Generic;
-using System.Management;
+using System.Runtime.InteropServices;
 using Microsoft.Win32;
 
 namespace PerfMonitorLive.Metrics
@@ -46,19 +46,19 @@ namespace PerfMonitorLive.Metrics
             catch (Exception ex) { Paths.Log("Reboot reg: " + ex.Message); }
             try
             {
-                using (var s = new ManagementObjectSearcher("SELECT CommittedBytes,CommitLimit,PoolNonpagedBytes FROM Win32_PerfFormattedData_PerfOS_Memory"))
-                    foreach (ManagementObject o in s.Get())
-                    {
-                        double c = Convert.ToDouble(o["CommittedBytes"]), l = Convert.ToDouble(o["CommitLimit"]);
-                        r.commit = l > 0 ? Math.Round(c * 100 / l, 1) : 0;
-                        r.pool = Math.Round(Convert.ToDouble(o["PoolNonpagedBytes"]) / 1048576.0);
-                    }
-                using (var s = new ManagementObjectSearcher("SELECT HandleCount FROM Win32_PerfFormattedData_PerfProc_Process WHERE Name='_Total'"))
-                    foreach (ManagementObject o in s.Get()) r.hnd = Math.Round(Convert.ToDouble(o["HandleCount"]) / 1000.0, 1);
-                using (var s = new ManagementObjectSearcher("SELECT NumberOfProcesses FROM Win32_OperatingSystem"))
-                    foreach (ManagementObject o in s.Get()) r.procs = Convert.ToInt32(o["NumberOfProcesses"]);
+                // GetPerformanceInfo : mêmes grandeurs que les compteurs WMI d'avant (mémoire validée, pool non paginé,
+                // handles, processus), sans requête WMI (celle sur Win32_PerfFormattedData_PerfProc_Process était très coûteuse).
+                uint size = (uint)Marshal.SizeOf<PERFORMANCE_INFORMATION>();
+                if (GetPerformanceInfo(out var pi, size))
+                {
+                    double c = (double)pi.CommitTotal, l = (double)pi.CommitLimit, page = (double)pi.PageSize;
+                    r.commit = l > 0 ? Math.Round(c * 100 / l, 1) : 0;
+                    r.pool = Math.Round((double)pi.KernelNonpaged * page / 1048576.0);
+                    r.hnd = Math.Round(pi.HandleCount / 1000.0, 1);
+                    r.procs = (int)pi.ProcessCount;
+                }
             }
-            catch (Exception ex) { Paths.Log("Reboot wmi: " + ex.Message); }
+            catch (Exception ex) { Paths.Log("Reboot perf: " + ex.Message); }
 
             int score = 0;
             if (r.wu || r.cbs) { score += 50; r.Reasons.Add(r.wu ? "une mise à jour Windows attend le redémarrage" : "des composants Windows attendent le redémarrage"); }
@@ -76,8 +76,18 @@ namespace PerfMonitorLive.Metrics
             _last = r; return r;
         }
 
+        [StructLayout(LayoutKind.Sequential)]
+        struct PERFORMANCE_INFORMATION
+        {
+            public uint cb;
+            public UIntPtr CommitTotal, CommitLimit, CommitPeak, PhysicalTotal, PhysicalAvailable, SystemCache, KernelTotal, KernelPaged, KernelNonpaged, PageSize;
+            public uint HandleCount, ProcessCount, ThreadCount;
+        }
+        [DllImport("psapi.dll", SetLastError = true)]
+        static extern bool GetPerformanceInfo(out PERFORMANCE_INFORMATION pi, uint size);
+
         static bool Exists(string path) { using (var k = Registry.LocalMachine.OpenSubKey(path)) return k != null; }
         public static string FormatUptime(double h) => h < 24 ? Math.Floor(h) + " h " + Math.Round((h - Math.Floor(h)) * 60) + " min" : Math.Floor(h / 24) + " j " + Math.Round(h % 24) + " h";
     }
 }
-
+

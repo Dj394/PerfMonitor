@@ -33,13 +33,17 @@ namespace PerfMonitorLive.Alerts
         public void OnSample(Sample s)
         {
             var now = s.Time;
-            foreach (var rule in _settings.Rules.ToArray())
+            // Rules n'est modifiée que sur le thread UI (EnsureDynamicRules, profils, réglages), dont les rappels sont sérialisés par le Dispatcher
+            // avec OnSample ; Fire ne fait que poster vers le Dispatcher. Parcours par index sur la liste courante : plus de copie par mesure.
+            var rules = _settings.Rules;
+            for (int ri = 0; ri < rules.Count; ri++)
             {
-                if (!_states.TryGetValue(rule.Id, out var st)) _states[rule.Id] = st = new State();
+                var rule = rules[ri]; var id = rule.Id;
+                if (!_states.TryGetValue(id, out var st)) _states[id] = st = new State();
                 var v = rule.Value(s);
                 if (!rule.Enabled || v == null)
                 {
-                    if (st.Active) { st.Active = false; ActiveRules.Remove(rule.Id); }
+                    if (st.Active) { st.Active = false; ActiveRules.Remove(id); }
                     st.AboveSince = null; continue;
                 }
                 double val = v.Value;
@@ -50,7 +54,7 @@ namespace PerfMonitorLive.Alerts
                     var held = (now - st.AboveSince.Value).TotalSeconds;
                     if (held >= rule.SustainSec)
                     {
-                        ActiveRules.Add(rule.Id);
+                        ActiveRules.Add(id);
                         if (!st.Active && (now - st.LastFired).TotalSeconds >= _settings.CooldownSec)
                         {
                             st.Active = true; st.LastFired = now;
@@ -59,7 +63,7 @@ namespace PerfMonitorLive.Alerts
                                 ? (rule.Metric == "cpu" ? s.procs[0] : s.procs.OrderByDescending(p => p.mem).First()) : null;
                             Fire(new AlertInfo
                             {
-                                RuleId = rule.Id, Time = now, Severity = sev,
+                                RuleId = id, Time = now, Severity = sev,
                                 Title = rule.Label + " : " + rule.Format(val),
                                 Detail = "Au-dessus de " + rule.Format(rule.Threshold) + " depuis " + FormatDur(held) + TopProc(rule, s),
                                 Proc = top?.n, ProcPid = top?.Pid ?? 0
@@ -71,16 +75,16 @@ namespace PerfMonitorLive.Alerts
                 {
                     if (st.Active)
                     {
-                        st.Active = false; ActiveRules.Remove(rule.Id);
+                        st.Active = false; ActiveRules.Remove(id);
                         if (_settings.NotifyRecovery)
                             Fire(new AlertInfo
                             {
-                                RuleId = rule.Id, Time = now, Severity = Severity.Ok,
+                                RuleId = id, Time = now, Severity = Severity.Ok,
                                 Title = rule.Label + " : retour à la normale (" + rule.Format(val) + ")",
                                 Detail = "Pic " + rule.Format(st.Peak) + " · durée " + FormatDur((now - st.AboveSince.Value).TotalSeconds)
                             });
                     }
-                    ActiveRules.Remove(rule.Id);
+                    ActiveRules.Remove(id);
                     st.AboveSince = null;
                 }
             }

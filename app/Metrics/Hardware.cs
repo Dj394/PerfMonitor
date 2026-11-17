@@ -55,8 +55,8 @@ namespace PerfMonitorLive.Metrics
                 {
                     h.Update();
                     Note(h);
-                    Paths.Log("Capteur " + h.HardwareType + " [" + Clean(h.Name) + "] : " + string.Join(" | ", h.Sensors.Where(x => x.SensorType == SensorType.Temperature || x.SensorType == SensorType.Fan || x.SensorType == SensorType.Clock || x.SensorType == SensorType.Power).Select(x => x.SensorType + ":" + x.Name + "=" + x.Value)));
-                    foreach (var sub in h.SubHardware) { sub.Update(); Note(sub); Paths.Log("  sous-capteur " + sub.HardwareType + " [" + Clean(sub.Name) + "] : " + string.Join(" | ", sub.Sensors.Where(x => x.SensorType == SensorType.Fan || x.SensorType == SensorType.Temperature).Select(x => x.SensorType + ":" + x.Name + "=" + x.Value))); }
+                    Paths.Log("Capteur " + h.HardwareType + " [" + Clean(h.Name) + "] : " + string.Join(" | ", h.Sensors.Where(x => x.SensorType == SensorType.Temperature || x.SensorType == SensorType.Fan || x.SensorType == SensorType.Clock || x.SensorType == SensorType.Power || x.SensorType == SensorType.Voltage).Select(x => x.SensorType + ":" + x.Name + "=" + x.Value)));
+                    foreach (var sub in h.SubHardware) { sub.Update(); Note(sub); Paths.Log("  sous-capteur " + sub.HardwareType + " [" + Clean(sub.Name) + "] : " + string.Join(" | ", sub.Sensors.Where(x => x.SensorType == SensorType.Fan || x.SensorType == SensorType.Temperature || x.SensorType == SensorType.Voltage).Select(x => x.SensorType + ":" + x.Name + "=" + x.Value))); }
                 }
                 return true;
             }
@@ -65,7 +65,7 @@ namespace PerfMonitorLive.Metrics
 
         /// <summary>Capteurs vus au moins une fois (à l'initialisation ou pendant une mesure). Un GPU hybride (Optimus)
         /// répond quand il est actif puis s'endort : la carte doit rester affichée, avec « en veille » à la place de la valeur.</summary>
-        public bool SawCpuTemp, SawCpuClock, SawCpuPower, SawGpuTemp, SawGpuClock, SawGpuPower, SawFans;
+        public bool SawCpuTemp, SawCpuClock, SawCpuPower, SawGpuTemp, SawGpuClock, SawGpuPower, SawFans, SawVolts;
 
         void Note(IHardware h)
         {
@@ -81,6 +81,7 @@ namespace PerfMonitorLive.Metrics
                         if (s.Value.Value < 150) { if (isGpu) SawGpuTemp = true; else if (isCpu) SawCpuTemp = true; }
                         break;
                     case SensorType.Fan: SawFans = true; break;
+                    case SensorType.Voltage: SawVolts = true; break;
                     case SensorType.Clock: if (isGpu) SawGpuClock = true; else if (isCpu) SawCpuClock = true; break;
                     case SensorType.Power: if (isGpu) SawGpuPower = true; else if (isCpu) SawCpuPower = true; break;
                 }
@@ -90,6 +91,8 @@ namespace PerfMonitorLive.Metrics
         public class Reading
         {
             public double? Cpu, Gpu, CpuMHz, GpuMHz, CpuW, GpuW;
+            public double? V12, V5, V33;
+            public List<VoltSample> Volts = new List<VoltSample>();
             public List<FanSample> Fans = new List<FanSample>();
             public List<StorSample> Storage = new List<StorSample>();
         }
@@ -102,7 +105,7 @@ namespace PerfMonitorLive.Metrics
             {
                 try
                 {
-                    bool mbDue = (DateTime.Now - _mbTime).TotalSeconds >= 5;   // carte mère (ventilateurs) : lecture SuperIO coûteuse, toutes les 5 s
+                    bool mbDue = (DateTime.Now - _mbTime).TotalSeconds >= MbIntervalSec;   // carte mère (ventilateurs, tensions) : lecture SuperIO coûteuse
                     foreach (var h in _pc.Hardware)
                     {
                         if (h.HardwareType == HardwareType.Motherboard)
@@ -113,24 +116,29 @@ namespace PerfMonitorLive.Metrics
                                 _mbTime = DateTime.Now; var tmp = new Reading();
                                 AddFans(h, "", tmp); foreach (var sub in h.SubHardware) AddFans(sub, "", tmp);
                                 _mbFans = tmp.Fans;
+                                AddVolts(h, tmp); foreach (var sub in h.SubHardware) AddVolts(sub, tmp);
+                                _mbVolts = tmp.Volts;
                             }
                             r.Fans.AddRange(_mbFans);
+                            r.Volts.AddRange(_mbVolts);
                             continue;
                         }
+                        var ht = h.HardwareType;
+                        // portable hybride : ignorer l'intégré (qui écraserait la carte dédiée) — avant Update(), inutile de l'interroger
+                        if ((ht == HardwareType.GpuAmd || ht == HardwareType.GpuNvidia || ht == HardwareType.GpuIntel) && GpuRank(h) < GpuWanted()) continue;
                         h.Update();
-                        switch (h.HardwareType)
+                        switch (ht)
                         {
                             case HardwareType.Cpu:
-                                r.Cpu = Pick(h, SensorType.Temperature, "Core (Tctl/Tdie)", "Tctl/Tdie", "CCD1 (Tdie)", "Core (Tctl)", "CPU Package", "Package", "Core Average", "Core Max") ?? Max(h, SensorType.Temperature);
+                                r.Cpu = Pick(h, SensorType.Temperature, CpuTempNames) ?? Max(h, SensorType.Temperature);
                                 // AMD nomme ses capteurs « Core #1 », Intel « CPU Core #1 » — et il ne faut pas prendre « Bus Speed »
-                                r.CpuMHz = Max(h, SensorType.Clock, x => x.Name.IndexOf("Core", StringComparison.OrdinalIgnoreCase) >= 0);
-                                r.CpuW = Pick(h, SensorType.Power, "Package", "CPU Package", "CPU Cores") ?? Max(h, SensorType.Power);
+                                r.CpuMHz = Max(h, SensorType.Clock, true);
+                                r.CpuW = Pick(h, SensorType.Power, CpuPowerNames) ?? Max(h, SensorType.Power);
                                 break;
                             case HardwareType.GpuAmd: case HardwareType.GpuNvidia: case HardwareType.GpuIntel:
-                                if (GpuRank(h) < GpuWanted()) break;   // portable hybride : ignorer l'intégré, qui écraserait la carte dédiée
-                                r.Gpu = Pick(h, SensorType.Temperature, "GPU Core", "GPU Hot Spot") ?? Max(h, SensorType.Temperature);
-                                r.GpuMHz = Pick(h, SensorType.Clock, "GPU Core") ?? Max(h, SensorType.Clock);
-                                r.GpuW = Pick(h, SensorType.Power, "GPU Package", "GPU Core", "GPU Total") ?? Max(h, SensorType.Power);
+                                r.Gpu = Pick(h, SensorType.Temperature, GpuTempNames) ?? Max(h, SensorType.Temperature);
+                                r.GpuMHz = Pick(h, SensorType.Clock, GpuClockNames) ?? Max(h, SensorType.Clock);
+                                r.GpuW = Pick(h, SensorType.Power, GpuPowerNames) ?? Max(h, SensorType.Power);
                                 AddFans(h, "GPU", r);
                                 break;
                         }
@@ -144,17 +152,36 @@ namespace PerfMonitorLive.Metrics
             if (r.GpuMHz.HasValue) SawGpuClock = true;
             if (r.CpuW.HasValue) SawCpuPower = true;
             if (r.GpuW.HasValue) SawGpuPower = true;
-            if (r.Fans.Any(f => f.rpm > 0)) SawFans = true;
+            foreach (var f in r.Fans) if (f.rpm > 0) { SawFans = true; break; }
+            r.V12 = PickVolt(r.Volts, "12"); r.V5 = PickVolt(r.Volts, "5"); r.V33 = PickVolt(r.Volts, "3.3");
+            if (r.Volts.Count > 0) SawVolts = true;
             ReadStorageWmi(r);
             return r;
         }
 
+        // Rangs GPU en cache. Ils dépendent de l'inventaire (Inventory.Current), qui peut être remplacé par un scan WMI
+        // terminé après TryInit : le cache est lié à la référence de l'inventaire et se vide tout seul dès qu'elle change
+        // (sans cela, GpuWanted() calculé avec l'inventaire d'avant le scan restait figé pour toute la session).
+        // Seul le thread des capteurs passe ici (TryInit puis Read).
         int _gpuWant = -1;
+        MachineInfo _rankInv;
+        readonly Dictionary<IHardware, int> _ranks = new Dictionary<IHardware, int>();
+        void SyncInventory()
+        {
+            var inv = Inventory.Current;
+            if (!ReferenceEquals(inv, _rankInv)) { _rankInv = inv; _ranks.Clear(); _gpuWant = -1; }
+        }
         /// <summary>Rang d'un GPU : 2 = carte dédiée reconnue dans l'inventaire, 1 = dédiée supposée, 0 = intégrée.
         /// Sur un portable hybride, le GPU intégré répond en permanence : sans priorité il écrase les mesures de la carte dédiée.</summary>
-        static int GpuRank(IHardware h)
+        int GpuRank(IHardware h)
         {
-            var name = Clean(h.Name); var inv = Inventory.Current;
+            SyncInventory();
+            if (!_ranks.TryGetValue(h, out int rank)) _ranks[h] = rank = ComputeGpuRank(h, _rankInv);
+            return rank;
+        }
+        static int ComputeGpuRank(IHardware h, MachineInfo inv)
+        {
+            var name = Clean(h.Name);
             if (inv != null && inv.Gpus != null)
                 foreach (var g in inv.Gpus)
                     if (!string.IsNullOrEmpty(g.Name) && (g.Name.IndexOf(name, StringComparison.OrdinalIgnoreCase) >= 0 || name.IndexOf(g.Name, StringComparison.OrdinalIgnoreCase) >= 0))
@@ -164,6 +191,7 @@ namespace PerfMonitorLive.Metrics
         /// <summary>Rang du GPU à suivre : le meilleur présent sur la machine (une machine sans carte dédiée suit son GPU intégré).</summary>
         int GpuWanted()
         {
+            SyncInventory();
             if (_gpuWant < 0)
                 foreach (var h in _pc.Hardware)
                     if (h.HardwareType == HardwareType.GpuAmd || h.HardwareType == HardwareType.GpuNvidia || h.HardwareType == HardwareType.GpuIntel)
@@ -171,7 +199,37 @@ namespace PerfMonitorLive.Metrics
             return _gpuWant < 0 ? 0 : _gpuWant;
         }
 
-        DateTime _mbTime = DateTime.MinValue; List<FanSample> _mbFans = new List<FanSample>();
+        /// <summary>Cadence de lecture du Super I/O (ventilateurs et tensions). Volontairement plus lente que la mesure :
+        /// l'appel est coûteux et ces grandeurs bougent lentement. Descendre à 1 s multiplie ce coût par cinq —
+        /// inutile pour voir un affaissement de rail, qui se joue sur des minutes.</summary>
+        public int MbIntervalSec = 5;
+
+        DateTime _mbTime = DateTime.MinValue; List<FanSample> _mbFans = new List<FanSample>(); List<VoltSample> _mbVolts = new List<VoltSample>();
+
+        /// <summary>Tensions des rails, lues sur le Super I/O de la carte mere. Tous les rails sont conserves tels quels :
+        /// le nommage depend de la puce (Nuvoton, ITE...) et du mappage que LibreHardwareMonitor a pour ce modele de carte,
+        /// donc on enregistre tout et on nomme ensuite ce qu'on reconnait.</summary>
+        static void AddVolts(IHardware h, Reading r)
+        {
+            foreach (var s in h.Sensors.Where(x => x.SensorType == SensorType.Voltage && x.Value.HasValue && x.Value.Value > 0))
+            {
+                var name = Clean(s.Name);
+                if (name.Length == 0 || r.Volts.Any(v => v.n == name)) continue;
+                r.Volts.Add(new VoltSample { n = name, v = Math.Round(s.Value.Value, 3) });
+            }
+        }
+        /// <summary>Retrouve un rail quel que soit le style du capteur : « +12V », « 12V », « +12V Voltage » donnent tous « 12 ».</summary>
+        static double? PickVolt(List<VoltSample> list, string rail)
+        {
+            foreach (var v in list) if (NormVolt(v.n) == rail) return v.v;
+            return null;
+        }
+        static string NormVolt(string n)
+        {
+            var s = (n ?? "").ToLowerInvariant().Replace("voltage", "").Replace("+", "").Replace(" ", "");
+            if (s.EndsWith("v")) s = s.Substring(0, s.Length - 1);
+            return s;
+        }
         static void AddFans(IHardware h, string prefix, Reading r)
         {
             foreach (var s in h.Sensors.Where(x => x.SensorType == SensorType.Fan && x.Value.HasValue))
@@ -183,17 +241,33 @@ namespace PerfMonitorLive.Metrics
             }
         }
         static string Clean(string n) => (n ?? "").Replace("\0", "").Trim();
-        static double? Pick(IHardware h, SensorType type, params string[] names)
+        // Listes de noms de capteurs, par ordre de préférence (tableaux statiques : pas de params alloué à chaque lecture)
+        static readonly string[] CpuTempNames = { "Core (Tctl/Tdie)", "Tctl/Tdie", "CCD1 (Tdie)", "Core (Tctl)", "CPU Package", "Package", "Core Average", "Core Max" };
+        static readonly string[] CpuPowerNames = { "Package", "CPU Package", "CPU Cores" };
+        static readonly string[] GpuTempNames = { "GPU Core", "GPU Hot Spot" };
+        static readonly string[] GpuClockNames = { "GPU Core" };
+        static readonly string[] GpuPowerNames = { "GPU Package", "GPU Core", "GPU Total" };
+        static double? Pick(IHardware h, SensorType type, string[] names)
         {
             // 0 = capteur présent mais non renseigné (portable Intel sans pilote noyau : Power:CPU Package=0) → pas une mesure
-            var list = h.Sensors.Where(s => s.SensorType == type && s.Value.HasValue && s.Value.Value > 0).ToList();
-            foreach (var n in names) { var s = list.FirstOrDefault(x => x.Name == n); if (s != null) return Math.Round(s.Value.Value, 1); }
+            var sensors = h.Sensors;
+            foreach (var n in names)
+                foreach (var s in sensors)
+                    if (s.SensorType == type && s.Value.HasValue && s.Value.Value > 0 && s.Name == n) return Math.Round(s.Value.Value, 1);
             return null;
         }
-        static double? Max(IHardware h, SensorType type, Func<ISensor, bool> filter = null)
+        static double? Max(IHardware h, SensorType type, bool coreOnly = false)
         {
-            var list = h.Sensors.Where(s => s.SensorType == type && s.Value.HasValue && s.Value.Value > 0 && (type != SensorType.Temperature || s.Value.Value < 150) && (filter == null || filter(s))).ToList();
-            return list.Count == 0 ? (double?)null : Math.Round(list.Max(s => s.Value.Value), 1);
+            float best = 0; bool any = false;
+            foreach (var s in h.Sensors)
+            {
+                if (s.SensorType != type || !s.Value.HasValue) continue;
+                float v = s.Value.Value;
+                if (v <= 0 || (type == SensorType.Temperature && v >= 150)) continue;
+                if (coreOnly && s.Name.IndexOf("Core", StringComparison.OrdinalIgnoreCase) < 0) continue;
+                if (!any || v > best) { best = v; any = true; }
+            }
+            return any ? Math.Round(best, 1) : (double?)null;
         }
 
         // --- Santé & température disques via Windows (MSFT_PhysicalDisk + MSFT_StorageReliabilityCounter, admin requis)
@@ -212,24 +286,27 @@ namespace PerfMonitorLive.Metrics
                 {
                     if (_diskNames == null) _diskNames = DiskNames();
                     using (var s = new System.Management.ManagementObjectSearcher(@"root\Microsoft\Windows\Storage", "SELECT * FROM MSFT_PhysicalDisk"))
-                        foreach (System.Management.ManagementObject pd in s.Get())
-                        {
-                            var id = pd["DeviceId"] as string; if (id == null) continue;
-                            var st = new StorSample { n = _diskNames.TryGetValue(id, out var n) ? n : "Disque " + id, health = ToInt(pd["HealthStatus"]) };
-                            using (var rel = pd.GetRelated("MSFT_StorageReliabilityCounter"))
-                                foreach (System.Management.ManagementObject o in rel)
-                                {
-                                    double t = ToD(o["Temperature"]);
-                                    if (t > 0 && t < 150) st.t = t;
-                                    st.tmax = ToD(o["TemperatureMax"]);
-                                    st.wear = ToD(o["Wear"]);
-                                    st.hours = ToD(o["PowerOnHours"]);
-                                    st.rerr = ToD(o["ReadErrorsTotal"]); st.rerrU = ToD(o["ReadErrorsUncorrected"]);
-                                    st.werr = ToD(o["WriteErrorsTotal"]); st.werrU = ToD(o["WriteErrorsUncorrected"]);
-                                    st.starts = ToD(o["StartStopCycleCount"]);
-                                }
-                            list.Add(st);
-                        }
+                    using (var disks = s.Get())
+                        foreach (System.Management.ManagementObject pd in disks)
+                            using (pd)
+                            {
+                                var id = pd["DeviceId"] as string; if (id == null) continue;
+                                var st = new StorSample { n = _diskNames.TryGetValue(id, out var n) ? n : "Disque " + id, health = ToInt(pd["HealthStatus"]) };
+                                using (var rel = pd.GetRelated("MSFT_StorageReliabilityCounter"))
+                                    foreach (System.Management.ManagementObject o in rel)
+                                        using (o)
+                                        {
+                                            double t = ToD(o["Temperature"]);
+                                            if (t > 0 && t < 150) st.t = t;
+                                            st.tmax = ToD(o["TemperatureMax"]);
+                                            st.wear = ToD(o["Wear"]);
+                                            st.hours = ToD(o["PowerOnHours"]);
+                                            st.rerr = ToD(o["ReadErrorsTotal"]); st.rerrU = ToD(o["ReadErrorsUncorrected"]);
+                                            st.werr = ToD(o["WriteErrorsTotal"]); st.werrU = ToD(o["WriteErrorsUncorrected"]);
+                                            st.starts = ToD(o["StartStopCycleCount"]);
+                                        }
+                                list.Add(st);
+                            }
                 }
                 catch (Exception ex) { if (_diag++ < 3) Paths.Log("Storage WMI: " + ex.Message); }
                 _storCache = list;
@@ -245,17 +322,25 @@ namespace PerfMonitorLive.Metrics
             try
             {
                 using (var s = new System.Management.ManagementObjectSearcher(@"root\Microsoft\Windows\Storage", "SELECT DeviceId,FriendlyName FROM MSFT_PhysicalDisk"))
-                    foreach (System.Management.ManagementObject o in s.Get()) names[(string)o["DeviceId"]] = ((o["FriendlyName"] as string) ?? "").Replace("NVMe ", "").Trim();
+                using (var pds = s.Get())
+                    foreach (System.Management.ManagementObject o in pds)
+                        using (o) names[(string)o["DeviceId"]] = ((o["FriendlyName"] as string) ?? "").Replace("NVMe ", "").Trim();
                 using (var s = new System.Management.ManagementObjectSearcher("SELECT DeviceID,Index FROM Win32_DiskDrive"))
-                    foreach (System.Management.ManagementObject d in s.Get())
-                    {
-                        var idx = Convert.ToInt32(d["Index"]).ToString(); var letters = new List<string>();
-                        using (var ps = new System.Management.ManagementObjectSearcher("ASSOCIATORS OF {Win32_DiskDrive.DeviceID='" + d["DeviceID"] + "'} WHERE AssocClass=Win32_DiskDriveToDiskPartition"))
-                            foreach (System.Management.ManagementObject part in ps.Get())
-                                using (var ls = new System.Management.ManagementObjectSearcher("ASSOCIATORS OF {Win32_DiskPartition.DeviceID='" + part["DeviceID"] + "'} WHERE AssocClass=Win32_LogicalDiskToPartition"))
-                                    foreach (System.Management.ManagementObject ld in ls.Get()) letters.Add((string)ld["DeviceID"]);
-                        if (letters.Count > 0 && names.ContainsKey(idx)) names[idx] = names[idx] + " (" + string.Join(", ", letters) + ")";
-                    }
+                using (var drives = s.Get())
+                    foreach (System.Management.ManagementObject d in drives)
+                        using (d)
+                        {
+                            var idx = Convert.ToInt32(d["Index"]).ToString(); var letters = new List<string>();
+                            using (var ps = new System.Management.ManagementObjectSearcher("ASSOCIATORS OF {Win32_DiskDrive.DeviceID='" + d["DeviceID"] + "'} WHERE AssocClass=Win32_DiskDriveToDiskPartition"))
+                            using (var parts = ps.Get())
+                                foreach (System.Management.ManagementObject part in parts)
+                                    using (part)
+                                    using (var ls = new System.Management.ManagementObjectSearcher("ASSOCIATORS OF {Win32_DiskPartition.DeviceID='" + part["DeviceID"] + "'} WHERE AssocClass=Win32_LogicalDiskToPartition"))
+                                    using (var lds = ls.Get())
+                                        foreach (System.Management.ManagementObject ld in lds)
+                                            using (ld) letters.Add((string)ld["DeviceID"]);
+                            if (letters.Count > 0 && names.ContainsKey(idx)) names[idx] = names[idx] + " (" + string.Join(", ", letters) + ")";
+                        }
             }
             catch (Exception ex) { Paths.Log("DiskNames: " + ex.Message); }
             return names;

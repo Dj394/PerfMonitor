@@ -15,9 +15,23 @@ namespace PerfMonitorLive.UI
         readonly DispatcherTimer _timer = new DispatcherTimer();
         bool _closing;
 
+        /// <summary>Ombre mise en cache bitmap à la résolution de l'écran (sinon floue à 125/150 %), comme dans MainWindow.</summary>
+        void ApplyBitmapCache(double scale)
+        {
+            if (scale <= 0) scale = 1;
+            ShadowLayer.CacheMode = new BitmapCache(scale) { SnapsToDevicePixels = true };
+        }
+        protected override void OnDpiChanged(DpiScale oldDpi, DpiScale newDpi)
+        {
+            base.OnDpiChanged(oldDpi, newDpi);
+            ApplyBitmapCache(newDpi.DpiScaleX);
+        }
+
         public ToastWindow(AlertInfo a, int seconds)
         {
             InitializeComponent();
+            SoftwareRender.Apply(this);
+            Loaded += (_, _) => ApplyBitmapCache(VisualTreeHelper.GetDpi(this).DpiScaleX);
             TitleText.Text = a.Title;
             DetailText.Text = a.Detail;
             var c = a.Severity == Severity.Critical ? Palette.Bad : a.Severity == Severity.Ok ? Palette.Good : a.Severity == Severity.Info ? Palette.Neutral : Palette.Warn;

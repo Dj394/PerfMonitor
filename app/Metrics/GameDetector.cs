@@ -17,8 +17,11 @@ namespace PerfMonitorLive.Metrics
         readonly Settings _s;
         public bool Active { get; private set; }
         public string Game { get; private set; }
+        /// <summary>PID du jeu au premier plan, 0 si aucun. Sert a rattacher les images comptees par <see cref="FpsMeter"/>
+        /// au bon processus : le nom ne suffit pas, ETW ne connait que les PID.</summary>
+        public int Pid { get; private set; }
         DateTime _seenSince = DateTime.MinValue, _lastSeen = DateTime.MinValue, _start;
-        string _candidate;
+        string _candidate; int _fgPid;
         // stats de session
         int _n; double _cpuSum, _cpuMax, _tempMax, _gpuMax, _memMax;
         public event Action<string> Started;
@@ -38,10 +41,17 @@ namespace PerfMonitorLive.Metrics
                 if (h != IntPtr.Zero)
                 {
                     GetWindowThreadProcessId(h, out uint pid);
-                    string name = null;
-                    try { using (var p = Process.GetProcessById((int)pid)) name = p.ProcessName; } catch { }
+                    string name;
+                    if (pid != 0 && (int)pid == _namePid) name = _nameOfPid;   // même fenêtre qu'au tick précédent : pas de nouvelle requête
+                    else
+                    {
+                        name = ProcName(pid);
+                        if (name != null) { _namePid = (int)pid; _nameOfPid = name; }   // un échec n'est pas mémorisé : on réessaie au prochain tick
+                        else _namePid = -1;
+                    }
                     if (name != null && !Exclude.Contains(name))
                     {
+                        _fgPid = (int)pid;
                         if (_s.Games.Any(g => g.Equals(name, StringComparison.OrdinalIgnoreCase))) found = name;
                         else if (_s.GameAutoDetect && GetWindowRect(h, out var r))
                         {
@@ -60,6 +70,7 @@ namespace PerfMonitorLive.Metrics
             {
                 if (found != _candidate) { _candidate = found; _seenSince = now; }
                 _lastSeen = now;
+                Pid = _fgPid;
                 if (!Active && (now - _seenSince).TotalSeconds >= 8) Begin(found, now);
             }
             else if (Active && (now - _lastSeen).TotalSeconds >= 30) End(now);
@@ -84,10 +95,42 @@ namespace PerfMonitorLive.Metrics
             Active = false;
             var sess = new GameSession { ts = _start.ToString("yyyy-MM-ddTHH:mm:ss"), game = Game, min = Math.Round((now - _start).TotalMinutes, 1), cpuAvg = _n > 0 ? Math.Round(_cpuSum / _n) : 0, cpuMax = _cpuMax, tempMax = _tempMax, gpuMax = _gpuMax, memMax = Math.Round(_memMax) };
             try { Directory.CreateDirectory(Paths.DataDir); File.AppendAllText(Path.Combine(Paths.DataDir, "sessions.jsonl"), JsonSerializer.Serialize(sess) + "\n", new UTF8Encoding(false)); } catch { }
-            Game = null; _candidate = null;
+            Game = null; _candidate = null; Pid = 0;
             Ended?.Invoke(sess);
         }
         public void ForceEnd() { if (Active) End(DateTime.Now); }
+
+        int _namePid = -1; string _nameOfPid;
+        readonly char[] _pathBuf = new char[1024];
+
+        /// <summary>Nom du processus sans extension, comme <see cref="Process.ProcessName"/>, mais via OpenProcess + QueryFullProcessImageName :
+        /// <c>Process.GetProcessById(..).ProcessName</c> énumère tous les processus du système à chaque appel.</summary>
+        string ProcName(uint pid)
+        {
+            if (pid == 0) return null;
+            IntPtr hp = OpenProcess(0x1000 /* PROCESS_QUERY_LIMITED_INFORMATION */, false, pid);
+            if (hp != IntPtr.Zero)
+            {
+                try
+                {
+                    uint len = (uint)_pathBuf.Length;
+                    if (QueryFullProcessImageNameW(hp, 0, _pathBuf, ref len) && len > 0)
+                    {
+                        int start = 0;
+                        for (int i = (int)len - 1; i >= 0; i--) if (_pathBuf[i] == '\\' || _pathBuf[i] == '/') { start = i + 1; break; }
+                        int n = (int)len - start;
+                        if (n > 4 && string.Compare(new string(_pathBuf, (int)len - 4, 4), ".exe", StringComparison.OrdinalIgnoreCase) == 0) n -= 4;
+                        if (n > 0) return new string(_pathBuf, start, n);
+                    }
+                }
+                finally { CloseHandle(hp); }
+            }
+            try { using (var p = Process.GetProcessById((int)pid)) return p.ProcessName; } catch { return null; }   // repli (accès refusé, chemin trop long...)
+        }
+
+        [DllImport("kernel32.dll", SetLastError = true)] static extern IntPtr OpenProcess(uint access, bool inherit, uint pid);
+        [DllImport("kernel32.dll", SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)] static extern bool CloseHandle(IntPtr h);
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)] static extern bool QueryFullProcessImageNameW(IntPtr h, uint flags, [Out] char[] buf, ref uint size);
 
         [StructLayout(LayoutKind.Sequential)] public struct RECT { public int L, T, R, B; }
         [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();

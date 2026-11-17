@@ -5,9 +5,16 @@
         WindowStyle="None" AllowsTransparency="True" Background="Transparent" ResizeMode="NoResize"
         ShowInTaskbar="False" ShowActivated="False" Topmost="True" WindowStartupLocation="Manual"
         FontFamily="Segoe UI" FontSize="12.5">
-    <Border x:Name="Card" CornerRadius="12" Background="{DynamicResource ToastBgBrush}" BorderBrush="{DynamicResource ToastBorderBrush}" BorderThickness="1" Padding="12,7" Cursor="SizeAll"
+    <Grid>
+    <!-- fond + ombre : calque fixe, mis en cache (bitmap) pour ne pas refaire l'ombre a chaque mise a jour du texte -->
+    <Border x:Name="ShadowLayer" IsHitTestVisible="False">
+        <Border CornerRadius="12" Background="{DynamicResource ToastBgBrush}" BorderBrush="{DynamicResource ToastBorderBrush}" BorderThickness="1">
+            <Border.Effect><DropShadowEffect BlurRadius="12" ShadowDepth="0" Opacity="0.45"/></Border.Effect>
+        </Border>
+    </Border>
+    <!-- le contenu garde la meme geometrie (bordure 1 px + marges) ; Transparent = cliquable/deplacable comme avant -->
+    <Border x:Name="Card" CornerRadius="12" Background="Transparent" BorderThickness="1" Padding="12,7" Cursor="SizeAll"
             ToolTip="PerfMonitor Live — glisser pour déplacer, clic droit pour le menu, double-clic pour ouvrir">
-        <Border.Effect><DropShadowEffect BlurRadius="12" ShadowDepth="0" Opacity="0.45"/></Border.Effect>
         <Border.ContextMenu>
             <ContextMenu>
                 <MenuItem Header="Ouvrir PerfMonitor Live" Click="Open_Click"/>
@@ -27,4 +34,5 @@
             <TextBlock x:Name="T5" Foreground="{DynamicResource FgBrush}" VerticalAlignment="Center"/>
         </StackPanel>
     </Border>
+    </Grid>
 </Window>
