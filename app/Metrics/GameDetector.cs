@@ -26,6 +26,7 @@ namespace PerfMonitorLive.Metrics
         string _candidate; int _fgPid;
         // stats de session
         int _n; double _cpuSum, _cpuMax, _tempMax, _gpuMax, _memMax;
+        int _nGpu, _nGpuBound, _nCpuBound; double _gpuLoadSum;   // charge GPU et indice limité CPU / GPU
         public event Action<string> Started;
         public event Action<GameSession> Ended;
         static readonly HashSet<string> Exclude = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
@@ -100,20 +101,27 @@ namespace PerfMonitorLive.Metrics
                 if (latest.temp.HasValue) _tempMax = Math.Max(_tempMax, latest.temp.Value);
                 if (latest.gpu.HasValue) _gpuMax = Math.Max(_gpuMax, latest.gpu.Value);
                 _memMax = Math.Max(_memMax, latest.memPct);
+                if (latest.gpuLoad.HasValue)
+                {
+                    _nGpu++; _gpuLoadSum += latest.gpuLoad.Value;
+                    int b = Bottleneck.Classify(latest.gpuLoad, latest.cpuCore, latest.cpu);
+                    if (b == Bottleneck.Gpu) _nGpuBound++; else if (b == Bottleneck.Cpu) _nCpuBound++;
+                }
             }
             return Active;
         }
 
         void Begin(string game, DateTime now)
         {
-            Active = true; Game = game; _start = now; _n = 0; _cpuSum = _cpuMax = _tempMax = _gpuMax = _memMax = 0;
+            Active = true; Game = game; _start = now; _n = 0; _cpuSum = _cpuMax = _tempMax = _gpuMax = _memMax = 0; _nGpu = _nGpuBound = _nCpuBound = 0; _gpuLoadSum = 0;
             Log("Session jeu : " + game);
             Started?.Invoke(game);
         }
         void End(DateTime now)
         {
             Active = false;
-            var sess = new GameSession { ts = _start.ToString("yyyy-MM-ddTHH:mm:ss"), game = Game, min = Math.Round((now - _start).TotalMinutes, 1), cpuAvg = _n > 0 ? Math.Round(_cpuSum / _n) : 0, cpuMax = _cpuMax, tempMax = _tempMax, gpuMax = _gpuMax, memMax = Math.Round(_memMax) };
+            var sess = new GameSession { ts = _start.ToString("yyyy-MM-ddTHH:mm:ss"), game = Game, min = Math.Round((now - _start).TotalMinutes, 1), cpuAvg = _n > 0 ? Math.Round(_cpuSum / _n) : 0, cpuMax = _cpuMax, tempMax = _tempMax, gpuMax = _gpuMax, memMax = Math.Round(_memMax),
+                gpuLoadAvg = _nGpu > 0 ? Math.Round(_gpuLoadSum / _nGpu) : (double?)null, bound = Bottleneck.Verdict(_nGpuBound, _nCpuBound, _nGpu) };
             try { Save(sess); } catch { }
             Game = null; _candidate = null; Pid = 0;
             Ended?.Invoke(sess);

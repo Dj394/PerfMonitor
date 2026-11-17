@@ -73,6 +73,11 @@ namespace PerfMonitorLive.Metrics
         public double? cpuW { get; set; }
         public double? gpuW { get; set; }
         public double? fps { get; set; }      // images par seconde du jeu au premier plan (ETW/DXGI)
+        // Charge GPU et VRAM (LibreHardwareMonitor) : absentes des fichiers antérieurs, relues alors à null
+        public double? gpuLoad { get; set; }  // % de charge du cœur GPU
+        public double? vram { get; set; }     // mémoire vidéo utilisée, Go
+        public double? vramPct { get; set; }  // % de la mémoire vidéo totale (null si le total est inconnu)
+        public double? cpuCore { get; set; }  // % de charge du cœur CPU le plus chargé (indice limité CPU / GPU)
         public List<FanSample> fans { get; set; } = new List<FanSample>();
         public List<StorSample> stor { get; set; } = new List<StorSample>();
         public double? v12 { get; set; }      // rail +12 V (alimentation du CPU et de la carte graphique)

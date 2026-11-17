@@ -31,6 +31,7 @@ namespace PerfMonitorLive
                     case "gpuTemp": return "Température GPU";
                     case "cpuW": return "Consommation CPU";
                     case "gpuW": return "Consommation GPU";
+                    case "vramPct": return "Mémoire vidéo (VRAM)";
                     case "stor.temp": return "Température " + (Disk ?? "disque");
                     case "stor.err": return "Erreurs disque " + (Disk ?? "");
                     case "stor.health": return "État SMART " + (Disk ?? "");
@@ -52,7 +53,7 @@ namespace PerfMonitorLive
             {
                 switch (Metric)
                 {
-                    case "cpu": case "memPct": case "disk.pct": return "%";
+                    case "cpu": case "memPct": case "disk.pct": case "vramPct": return "%";
                     case "temp": case "gpuTemp": case "stor.temp": return "°C";
                     case "rx": case "tx": case "disk.rw": return "Mo/s";
                     case "disk.lat": return "ms";
@@ -77,6 +78,7 @@ namespace PerfMonitorLive
                 case "gpuTemp": return s.gpu;
                 case "cpuW": return s.cpuW;
                 case "gpuW": return s.gpuW;
+                case "vramPct": return s.vramPct;
                 case "reboot": return s.rb?.score;
                 case "rx": return s.rx / 1024;
                 case "tx": return s.tx / 1024;
@@ -216,6 +218,8 @@ namespace PerfMonitorLive
             Ensure("reboot", null, 70, 120, true);
             Ensure("cpuW", null, 140, 60, false);
             Ensure("gpuW", null, 330, 60, false);
+            // VRAM pleine : désactivée par défaut, beaucoup de jeux remplissent la VRAM par conception (cache de textures)
+            Ensure("vramPct", null, 95, 60, false);
             Ensure("rx", null, 50, 30, false);
             Ensure("tx", null, 50, 30, false);
             Ensure("pageIn", null, 2000, 30, false);

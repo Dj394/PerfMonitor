@@ -56,6 +56,9 @@ namespace PerfMonitorLive.Metrics
                 case "gpuMHz": return s.gpuMHz;
                 case "cpuW": return s.cpuW;
                 case "gpuW": return s.gpuW;
+                case "gpuLoad": return s.gpuLoad;
+                case "vramPct": return s.vramPct;
+                case "vram": return s.vram;
                 case "rx": return s.rx / 1024;
                 case "tx": return s.tx / 1024;
                 case "pageIn": return s.pageIn;

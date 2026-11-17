@@ -13,6 +13,12 @@ namespace PerfMonitorLive.Alerts
         public string ts { get; set; } public string game { get; set; } public double min { get; set; }
         public double cpuAvg { get; set; } public double cpuMax { get; set; } public double tempMax { get; set; } public double gpuMax { get; set; } public double memMax { get; set; }
         public DateTime Time => DateTime.TryParse(ts, out var t) ? t : DateTime.MinValue;
+        /// <summary>Charge GPU moyenne (%) et indice de goulot (voir <see cref="Bottleneck.Verdict"/>) ; absents des sessions
+        /// enregistrées avant leur ajout, ou sans capteur de charge GPU.</summary>
+        public double? gpuLoadAvg { get; set; } public string bound { get; set; }
+        /// <summary>« · GPU 87 % moy · limité par le GPU », ou vide si la charge GPU n'a pas été mesurée.</summary>
+        [System.Text.Json.Serialization.JsonIgnore] public string GpuText
+            => gpuLoadAvg.HasValue ? " · GPU " + Math.Round(gpuLoadAvg.Value) + " % moy" + (Bottleneck.Text(bound) is string b ? " · " + b : "") : "";
     }
 
     /// <summary>Bilan quotidien (veille) : texte prêt pour un toast et pour Telegram.</summary>

@@ -392,7 +392,7 @@ namespace PerfMonitorLive
             {
                 RuleId = "session", Severity = Severity.Info, Time = DateTime.Now,
                 Title = "Session " + sess.game + " : " + Math.Round(sess.min) + " min",
-                Detail = "CPU " + sess.cpuAvg + " % moy / " + sess.cpuMax + " % max · CPU " + sess.tempMax + " °C max · GPU " + sess.gpuMax + " °C max · RAM " + sess.memMax + " % max"
+                Detail = "CPU " + sess.cpuAvg + " % moy / " + sess.cpuMax + " % max · CPU " + sess.tempMax + " °C max · GPU " + sess.gpuMax + " °C max · RAM " + sess.memMax + " % max" + sess.GpuText
             }, true);
         }
         public void ResetWidget() { EnsureWidget(); _widget?.ResetPosition(); }

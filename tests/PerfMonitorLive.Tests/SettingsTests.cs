@@ -8,7 +8,7 @@ namespace PerfMonitorLive.Tests
 {
     public class SettingsTests
     {
-        static readonly string[] DefaultMetrics = { "cpu", "memPct", "temp", "gpuTemp", "reboot", "cpuW", "gpuW", "rx", "tx", "pageIn" };
+        static readonly string[] DefaultMetrics = { "cpu", "memPct", "temp", "gpuTemp", "reboot", "cpuW", "gpuW", "vramPct", "rx", "tx", "pageIn" };
 
         [Fact]
         public void Load_sans_fichier_cree_les_valeurs_par_defaut_et_les_enregistre()
