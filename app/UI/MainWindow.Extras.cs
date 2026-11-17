@@ -24,7 +24,7 @@ namespace PerfMonitorLive.UI
         }
         void RefreshHistoryMetrics()
         {
-            History.SetMetrics(_cards.Select(c => new HistoryView.MetricDef { Key = c.Key, Title = c.Title, Unit = c.Unit.Length > 0 ? c.Unit : (c.Key.StartsWith("cpuMHz") || c.Key.StartsWith("gpuMHz") ? "MHz" : ""), FixedMax = c.IsPercent ? 100 : 0 }));
+            History.SetMetrics(_cards.Select(c => new HistoryView.MetricDef { Key = c.Key, Title = c.Title, Unit = c.Unit.Length > 0 ? c.Unit : (c.Key.StartsWith("cpuMHz") || c.Key.StartsWith("gpuMHz") ? "MHz" : c.Key == "gpuLoad" ? "%" : ""), FixedMax = c.IsPercent ? 100 : 0 }));
         }
 
         void InitExtras()

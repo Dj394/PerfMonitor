@@ -84,6 +84,7 @@ namespace PerfMonitorLive
 
             _sampler = new Sampler();
             _sampler.Fps.TargetPid = () => Games.Active ? Games.Pid : 0;
+            Games.FrameTimes = _sampler.Fps.FrameTimes;   // vrai « 1 % low » de session (histogramme des temps d'image)
             // Journal alimentation branché sur le thread de mesure, pas sur l'interface : quand la machine est
             // saturée, le Dispatcher prend du retard — or c'est exactement là qu'on veut la trace des dernières secondes.
             _sampler.SampleReady += s => _power.OnSample(s);
@@ -392,7 +393,7 @@ namespace PerfMonitorLive
             {
                 RuleId = "session", Severity = Severity.Info, Time = DateTime.Now,
                 Title = "Session " + sess.game + " : " + Math.Round(sess.min) + " min",
-                Detail = "CPU " + sess.cpuAvg + " % moy / " + sess.cpuMax + " % max · CPU " + sess.tempMax + " °C max · GPU " + sess.gpuMax + " °C max · RAM " + sess.memMax + " % max"
+                Detail = (sess.FpsText != null ? sess.FpsText + "\n" : "") + "CPU " + sess.cpuAvg + " % moy / " + sess.cpuMax + " % max · CPU " + sess.tempMax + " °C max · GPU " + sess.gpuMax + " °C max · RAM " + sess.memMax + " % max" + sess.GpuText
             }, true);
         }
         public void ResetWidget() { EnsureWidget(); _widget?.ResetPosition(); }

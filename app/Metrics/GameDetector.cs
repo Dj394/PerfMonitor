@@ -26,6 +26,13 @@ namespace PerfMonitorLive.Metrics
         string _candidate; int _fgPid;
         // stats de session
         int _n; double _cpuSum, _cpuMax, _tempMax, _gpuMax, _memMax;
+        int _nGpu, _nGpuBound, _nCpuBound; double _gpuLoadSum;   // charge GPU et indice limité CPU / GPU
+        int _fpsN, _lowN; double _fpsSum, _lowSum; long _saccBase = -1, _saccLast;
+        /// <summary>Histogramme cumulé des temps d'image (<see cref="FpsMeter.FrameTimes"/>) : le « 1 % low » de la session
+        /// est le 99e centile des images de toute la session (différence fin - début), et non une moyenne des 1 % low
+        /// pris sur des fenêtres de 2 s, qui gommait les ralentissements localisés. Null (tests) : repli sur cette moyenne.</summary>
+        public FrameTimeHistogram FrameTimes { get; set; }
+        long[] _histStart, _histEnd;   // alloués à la première session seulement
         public event Action<string> Started;
         public event Action<GameSession> Ended;
         static readonly HashSet<string> Exclude = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
@@ -100,23 +107,50 @@ namespace PerfMonitorLive.Metrics
                 if (latest.temp.HasValue) _tempMax = Math.Max(_tempMax, latest.temp.Value);
                 if (latest.gpu.HasValue) _gpuMax = Math.Max(_gpuMax, latest.gpu.Value);
                 _memMax = Math.Max(_memMax, latest.memPct);
+                if (latest.gpuLoad.HasValue)
+                {
+                    _nGpu++; _gpuLoadSum += latest.gpuLoad.Value;
+                    int b = Bottleneck.Classify(latest.gpuLoad, latest.cpuCore, latest.cpu);
+                    if (b == Bottleneck.Gpu) _nGpuBound++; else if (b == Bottleneck.Cpu) _nCpuBound++;
+                }
+                if (latest.fps.HasValue) { _fpsN++; _fpsSum += latest.fps.Value; }
+                if (latest.fps1.HasValue) { _lowN++; _lowSum += latest.fps1.Value; }
+                // total monotone : la différence fin - début compte chaque saccade une fois, même entre deux ticks
+                if (_saccBase < 0) _saccBase = latest.StutterTotal;
+                _saccLast = Math.Max(_saccLast, latest.StutterTotal);
             }
             return Active;
         }
 
         void Begin(string game, DateTime now)
         {
-            Active = true; Game = game; _start = now; _n = 0; _cpuSum = _cpuMax = _tempMax = _gpuMax = _memMax = 0;
+            Active = true; Game = game; _start = now; _n = 0; _cpuSum = _cpuMax = _tempMax = _gpuMax = _memMax = 0; _nGpu = _nGpuBound = _nCpuBound = 0; _gpuLoadSum = 0;
+            _fpsN = _lowN = 0; _fpsSum = _lowSum = 0; _saccBase = -1; _saccLast = 0;
+            if (FrameTimes != null) { _histStart ??= new long[FrameTimeHistogram.Bins]; FrameTimes.CopyTo(_histStart); }
             Log("Session jeu : " + game);
             Started?.Invoke(game);
         }
         void End(DateTime now)
         {
             Active = false;
-            var sess = new GameSession { ts = _start.ToString("yyyy-MM-ddTHH:mm:ss"), game = Game, min = Math.Round((now - _start).TotalMinutes, 1), cpuAvg = _n > 0 ? Math.Round(_cpuSum / _n) : 0, cpuMax = _cpuMax, tempMax = _tempMax, gpuMax = _gpuMax, memMax = Math.Round(_memMax) };
+            var sess = new GameSession { ts = _start.ToString("yyyy-MM-ddTHH:mm:ss"), game = Game, min = Math.Round((now - _start).TotalMinutes, 1), cpuAvg = _n > 0 ? Math.Round(_cpuSum / _n) : 0, cpuMax = _cpuMax, tempMax = _tempMax, gpuMax = _gpuMax, memMax = Math.Round(_memMax),
+                gpuLoadAvg = _nGpu > 0 ? Math.Round(_gpuLoadSum / _nGpu) : (double?)null, bound = Bottleneck.Verdict(_nGpuBound, _nCpuBound, _nGpu),
+                fpsAvg = _fpsN > 0 ? Math.Round(_fpsSum / _fpsN) : null, fps1 = SessionLow1(),
+                sacc = _fpsN > 0 && _saccBase >= 0 ? Math.Max(0, _saccLast - _saccBase) : null };
             try { Save(sess); } catch { }
             Game = null; _candidate = null; Pid = 0;
             Ended?.Invoke(sess);
+        }
+
+        /// <summary>« 1 % low » de la session : FPS du 99e centile des temps d'image de toutes ses images.</summary>
+        double? SessionLow1()
+        {
+            if (FrameTimes == null || _histStart == null) return _lowN > 0 ? Math.Round(_lowSum / _lowN) : null;
+            if (_fpsN == 0) return null;
+            _histEnd ??= new long[FrameTimeHistogram.Bins];
+            FrameTimes.CopyTo(_histEnd);
+            var p99 = FrameTimeHistogram.Percentile(_histEnd, _histStart, 0.99);
+            return p99 > 0 ? Math.Round(1000.0 / p99.Value) : null;
         }
 
         /// <summary>Journal et persistance des sessions ; remplaçables par les tests (qui n'ecrivent pas dans data/).</summary>

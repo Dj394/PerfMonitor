@@ -11,7 +11,7 @@ namespace PerfMonitorLive.Tests
 {
     public class PowerLogTests
     {
-        const string Header = "heure;fps;v12;v5;v33;cpuW;gpuW;cpuC;gpuC;gpuMHz;fanMax;cpuPct;jeu";
+        const string Header = "heure;fps;v12;v5;v33;cpuW;gpuW;cpuC;gpuC;gpuMHz;fanMax;cpuPct;jeu;fps1;fpsMs;sacc";
 
         static string CsvFor(DateTime day) => Path.Combine(Paths.DataDir, "power-" + day.ToString("yyyy-MM-dd") + ".csv");
 
@@ -57,14 +57,14 @@ namespace PerfMonitorLive.Tests
             TestEnvironment.Reset();
             var t = new DateTime(2026, 3, 5, 14, 7, 9);
             var s = TestData.FullSample(t);
-            s.fps = 59.96; s.v12 = 12.0349; s.v5 = 5.0; s.v33 = null; s.cpuW = 45.26; s.gpuW = null;
+            s.fps = 59.96; s.fps1 = 41.2; s.fpsMs = 16.678; s.sacc = 2; s.v12 = 12.0349; s.v5 = 5.0; s.v33 = null; s.cpuW = 45.26; s.gpuW = null;
             s.temp = 71.449; s.gpu = 66.55; s.gpuMHz = 1950.4; s.cpu = 12.5;
             s.fans = new List<FanSample> { new FanSample { n = "a", rpm = 900 }, new FanSample { n = "b", rpm = 1250 }, new FanSample { n = "c", rpm = 400 } };
             WithCulture(culture, () => new PowerLog { GameActive = () => true }.OnSample(s));
             var lines = WaitLines(CsvFor(t), 2);
             Assert.Equal(Header, lines[0].TrimEnd('\r'));
             var f = lines[1].Split(';');
-            Assert.Equal(13, f.Length);
+            Assert.Equal(16, f.Length);
             Assert.Equal("14:07:09", f[0]);
             Assert.Equal("60", f[1]);          // fps arrondi à l'unité
             Assert.Equal("12,035", f[2]);      // 3 décimales, virgule décimale
@@ -78,6 +78,9 @@ namespace PerfMonitorLive.Tests
             Assert.Equal("1250", f[10]);       // ventilateur le plus rapide
             Assert.Equal("12", f[11]);         // Math.Round(12.5) = 12 (arrondi bancaire)
             Assert.Equal("1", f[12]);          // jeu actif
+            Assert.Equal("41", f[13]);         // 1 % low arrondi à l'unité
+            Assert.Equal("16,68", f[14]);      // temps d'image moyen, 2 décimales
+            Assert.Equal("2", f[15]);          // saccades sur la fenêtre de 2 s
             Assert.DoesNotContain('.', lines[1]);   // aucun point décimal (ni séparateur de milliers)
         }
 
@@ -88,7 +91,7 @@ namespace PerfMonitorLive.Tests
             var t = new DateTime(2026, 3, 5, 14, 7, 10);
             new PowerLog().OnSample(new Sample { Time = t });   // tout à null, aucun ventilateur
             var lines = WaitLines(CsvFor(t), 2);
-            Assert.Equal("14:07:10" + new string(';', 10) + "0;0;0", lines[1].TrimEnd('\r'));
+            Assert.Equal("14:07:10" + new string(';', 10) + "0;0;0;;;", lines[1].TrimEnd('\r'));
         }
 
         [Fact]

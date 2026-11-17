@@ -65,7 +65,7 @@ namespace PerfMonitorLive.Metrics
 
         /// <summary>Capteurs vus au moins une fois (à l'initialisation ou pendant une mesure). Un GPU hybride (Optimus)
         /// répond quand il est actif puis s'endort : la carte doit rester affichée, avec « en veille » à la place de la valeur.</summary>
-        public bool SawCpuTemp, SawCpuClock, SawCpuPower, SawGpuTemp, SawGpuClock, SawGpuPower, SawFans, SawVolts;
+        public bool SawCpuTemp, SawCpuClock, SawCpuPower, SawGpuTemp, SawGpuClock, SawGpuPower, SawFans, SawVolts, SawGpuLoad, SawVram;
 
         void Note(IHardware h)
         {
@@ -84,6 +84,8 @@ namespace PerfMonitorLive.Metrics
                     case SensorType.Voltage: SawVolts = true; break;
                     case SensorType.Clock: if (isGpu) SawGpuClock = true; else if (isCpu) SawCpuClock = true; break;
                     case SensorType.Power: if (isGpu) SawGpuPower = true; else if (isCpu) SawCpuPower = true; break;
+                    case SensorType.Load: if (isGpu && Array.IndexOf(GpuLoadNames, s.Name) >= 0) SawGpuLoad = true; break;
+                    case SensorType.SmallData: if (isGpu && GpuRank(h) >= 1 && Array.IndexOf(VramUsedNames, s.Name) >= 0) SawVram = true; break;   // pas de VRAM pour un intégré
                 }
             }
         }
@@ -91,6 +93,7 @@ namespace PerfMonitorLive.Metrics
         public class Reading
         {
             public double? Cpu, Gpu, CpuMHz, GpuMHz, CpuW, GpuW;
+            public double? GpuLoad, VramGB, VramPct, VramTotalGB, CpuCoreMax;
             public double? V12, V5, V33;
             public List<VoltSample> Volts = new List<VoltSample>();
             public List<FanSample> Fans = new List<FanSample>();
@@ -134,12 +137,14 @@ namespace PerfMonitorLive.Metrics
                                 // AMD nomme ses capteurs « Core #1 », Intel « CPU Core #1 » — et il ne faut pas prendre « Bus Speed »
                                 r.CpuMHz = Max(h, SensorType.Clock, true);
                                 r.CpuW = Pick(h, SensorType.Power, CpuPowerNames) ?? Max(h, SensorType.Power);
+                                r.CpuCoreMax = Max(h, SensorType.Load, true);   // « CPU Core #n » / « CPU Core Max », pas « CPU Total »
                                 break;
                             case HardwareType.GpuAmd: case HardwareType.GpuNvidia: case HardwareType.GpuIntel:
                                 r.Gpu = Pick(h, SensorType.Temperature, GpuTempNames) ?? Max(h, SensorType.Temperature);
                                 r.GpuMHz = Pick(h, SensorType.Clock, GpuClockNames) ?? Max(h, SensorType.Clock);
                                 r.GpuW = Pick(h, SensorType.Power, GpuPowerNames) ?? Max(h, SensorType.Power);
                                 AddFans(h, "GPU", r);
+                                ReadGpuLoadVram(h, r);
                                 break;
                         }
                     }
@@ -152,6 +157,8 @@ namespace PerfMonitorLive.Metrics
             if (r.GpuMHz.HasValue) SawGpuClock = true;
             if (r.CpuW.HasValue) SawCpuPower = true;
             if (r.GpuW.HasValue) SawGpuPower = true;
+            if (r.GpuLoad.HasValue) SawGpuLoad = true;
+            if (r.VramGB.HasValue) SawVram = true;
             foreach (var f in r.Fans) if (f.rpm > 0) { SawFans = true; break; }
             r.V12 = PickVolt(r.Volts, "12"); r.V5 = PickVolt(r.Volts, "5"); r.V33 = PickVolt(r.Volts, "3.3");
             if (r.Volts.Count > 0) SawVolts = true;
@@ -247,13 +254,50 @@ namespace PerfMonitorLive.Metrics
         static readonly string[] GpuTempNames = { "GPU Core", "GPU Hot Spot" };
         static readonly string[] GpuClockNames = { "GPU Core" };
         static readonly string[] GpuPowerNames = { "GPU Package", "GPU Core", "GPU Total" };
-        static double? Pick(IHardware h, SensorType type, string[] names)
+        // Charge : « GPU Core » (NVIDIA, AMD), « D3D 3D » (Intel ; compteurs D3D de Windows)
+        static readonly string[] GpuLoadNames = { "GPU Core", "D3D 3D" };
+        // VRAM (SmallData, en Mo) : pilote (NVAPI/ADL) d'abord, compteurs D3D de Windows à défaut
+        static readonly string[] VramUsedNames = { "GPU Memory Used", "D3D Dedicated Memory Used" };
+        static readonly string[] VramTotalNames = { "GPU Memory Total" };
+        static readonly string[] VramFreeNames = { "GPU Memory Free" };
+
+        /// <summary>Charge GPU et VRAM du GPU suivi, lues sur les capteurs que <c>h.Update()</c> vient de rafraîchir (aucune
+        /// lecture supplémentaire, aucune allocation). Total VRAM : capteur du pilote, sinon utilisée + libre, sinon l'inventaire
+        /// (carte dédiée seulement : la « mémoire dédiée » d'un GPU intégré n'est qu'une petite réserve, un pourcentage
+        /// calculé dessus ne voudrait rien dire). Aucune VRAM n'est publiée pour un GPU intégré (Intel iGPU, APU AMD) :
+        /// sa « mémoire dédiée » (petite réserve, ou carve-out UMA collé à 100 %) ne reflète pas la mémoire partagée
+        /// qu'utilise réellement le jeu.</summary>
+        void ReadGpuLoadVram(IHardware h, Reading r)
         {
-            // 0 = capteur présent mais non renseigné (portable Intel sans pilote noyau : Power:CPU Package=0) → pas une mesure
+            r.GpuLoad = Pick(h, SensorType.Load, GpuLoadNames, zeroOk: true);
+            if (GpuRank(h) == 0) return;
+            var used = Pick(h, SensorType.SmallData, VramUsedNames);
+            if (!used.HasValue) return;
+            double? total = Pick(h, SensorType.SmallData, VramTotalNames);
+            if (!total.HasValue) { var free = Pick(h, SensorType.SmallData, VramFreeNames, zeroOk: true); if (free.HasValue) total = used.Value + free.Value; }
+            if (!total.HasValue && GpuRank(h) >= 1)
+            {
+                var g = _rankInv?.MainGpu;
+                if (g != null && !g.Integrated && g.VramGB > 0) total = g.VramGB * 1024;
+            }
+            r.VramGB = Math.Round(used.Value / 1024, 2);
+            r.VramPct = VramPercent(used.Value, total);
+            if (r.VramPct.HasValue) r.VramTotalGB = Math.Round(total.Value / 1024, 1);   // total exact, pas reconstruit depuis des valeurs arrondies
+        }
+        /// <summary>% de VRAM utilisée ; null si le total est inconnu ou incohérent (utilisée nettement au-delà du total).</summary>
+        internal static double? VramPercent(double usedMB, double? totalMB)
+        {
+            if (!totalMB.HasValue || totalMB.Value <= 0 || usedMB > totalMB.Value * 1.02) return null;
+            return Math.Round(Math.Min(100, usedMB * 100 / totalMB.Value), 1);
+        }
+        static double? Pick(IHardware h, SensorType type, string[] names, bool zeroOk = false)
+        {
+            // 0 = capteur présent mais non renseigné (portable Intel sans pilote noyau : Power:CPU Package=0) → pas une mesure,
+            // sauf pour une charge ou une mémoire libre, où 0 est une vraie valeur (GPU au repos)
             var sensors = h.Sensors;
             foreach (var n in names)
                 foreach (var s in sensors)
-                    if (s.SensorType == type && s.Value.HasValue && s.Value.Value > 0 && s.Name == n) return Math.Round(s.Value.Value, 1);
+                    if (s.SensorType == type && s.Value.HasValue && (s.Value.Value > 0 || zeroOk && s.Value.Value == 0) && s.Name == n) return Math.Round(s.Value.Value, 1);
             return null;
         }
         static double? Max(IHardware h, SensorType type, bool coreOnly = false)

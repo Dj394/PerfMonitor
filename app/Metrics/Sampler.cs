@@ -551,6 +551,7 @@ namespace PerfMonitorLive.Metrics
             var r = _sensors ?? new Hardware.Reading();
             Lap(4);
             s.temp = r.Cpu; s.gpu = r.Gpu; s.cpuMHz = r.CpuMHz; s.gpuMHz = r.GpuMHz; s.cpuW = r.CpuW; s.gpuW = r.GpuW;
+            s.gpuLoad = r.GpuLoad; s.vram = r.VramGB; s.vramPct = r.VramPct; s.VramTotal = r.VramTotalGB; s.cpuCore = r.CpuCoreMax;
             s.fans = r.Fans; s.stor = r.Storage;
             s.v12 = r.V12; s.v5 = r.V5; s.v33 = r.V33; s.volts = r.Volts;
             if (!Hw.Available && _tempAvailable)   // repli ACPI, lu par le thread des capteurs
@@ -559,6 +560,7 @@ namespace PerfMonitorLive.Metrics
                 if (!double.IsNaN(t)) s.temp = t;
             }
             s.fps = Fps.Read();   // un seul appel par mesure : la lecture consomme le compteur pour calculer un debit
+            s.fps1 = Fps.Low1; s.fpsMs = Fps.FrameMs; s.sacc = Fps.Stutters; s.StutterTotal = Fps.StutterTotal;
             Lap(5);
             return s;
         }

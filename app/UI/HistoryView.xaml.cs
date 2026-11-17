@@ -161,7 +161,7 @@ namespace PerfMonitorLive.UI
         void FillSessions()
         {
             var sess = DailyDigest.LoadSessions(_from, _to).OrderByDescending(x => x.Time).ToList();
-            SessionRows.ItemsSource = sess.Select(x => x.Time.ToString("dd/MM HH:mm") + " · " + x.game + " · " + Math.Round(x.min) + " min · CPU " + x.cpuAvg + " % moy / " + x.cpuMax + " % max · CPU " + x.tempMax + " °C · GPU " + x.gpuMax + " °C · RAM " + x.memMax + " %").ToList();
+            SessionRows.ItemsSource = sess.Select(x => x.Time.ToString("dd/MM HH:mm") + " · " + x.game + " · " + Math.Round(x.min) + " min · CPU " + x.cpuAvg + " % moy / " + x.cpuMax + " % max · CPU " + x.tempMax + " °C · GPU " + x.gpuMax + " °C · RAM " + x.memMax + " %" + x.GpuText + (x.FpsText != null ? " · " + x.FpsText : "")).ToList();
             SessionsEmpty.Visibility = sess.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
         }
         void FillAlerts()
